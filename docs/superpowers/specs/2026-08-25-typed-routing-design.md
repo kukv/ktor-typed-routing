@@ -108,7 +108,7 @@ public val JsonSchemaAttributeKey: AttributeKey<JsonSchemaInference>
 ktor-typed-routing/
 ├── settings.gradle.kts
 ├── build.gradle.kts
-├── ktor-typed-routing/                      # コア
+├── core/                                    # artifact: ktor-typed-routing-core
 │   └── src/main/kotlin/io/ktor/typed/routing/
 │       ├── Annotations.kt                   # @Path @Query @Header @Cookie @Body
 │       ├── RequestDecoder.kt                # AbstractDecoder 実装
@@ -116,7 +116,7 @@ ktor-typed-routing/
 │       ├── ParameterSource.kt               # 入力ソースの抽象
 │       ├── EndpointSpec.kt                  # エンドポイントのメタデータ
 │       ├── EndpointBuilder.kt               # 完全形の builder
-│       ├── EndpointDsl.kt                   # Route.endpoint()
+│       ├── EndpointDsl.kt                   # Route.endpoint() とメソッド別ショートハンド
 │       ├── TypedRouting.kt                  # ApplicationPlugin
 │       ├── Around.kt                        # インターセプタ
 │       ├── Validation.kt                    # validate / reject
@@ -124,7 +124,7 @@ ktor-typed-routing/
 │           ├── ApiException.kt              # 例外階層
 │           ├── ErrorBody.kt
 │           └── ErrorMapping.kt
-└── ktor-typed-routing-openapi/              # 公式 OpenAPI へのブリッジ
+└── openapi/                                 # artifact: ktor-typed-routing-openapi
     └── src/main/kotlin/io/ktor/typed/routing/openapi/
         └── OpenApiBridge.kt
 ```
@@ -134,6 +134,10 @@ ktor-typed-routing/
 `ktor-server-routing-openapi` の実行時注釈 API は `@ExperimentalKtorApi` である。
 OpenAPI を使わない利用者に実験的 API を強制せず、公式 API のシグネチャ変更による
 影響をこのモジュールに閉じ込める。
+
+Gradle のプロジェクトパスは `:core` / `:openapi`、公開時の artifact 名は
+`ktor-typed-routing-core` / `ktor-typed-routing-openapi` とする。
+ルートプロジェクトと同名のサブモジュールは作らない。
 
 ## 5. 公開 API
 
@@ -185,7 +189,45 @@ routing {
 簡易形と完全形で `status` の置き場所は異なるが、**それぞれの形に書き方は 1 つしかない**。
 簡易形には builder が存在せず、完全形には引数が存在しない。
 
-### 5.4 標準 Route への落とし込み
+### 5.4 ネストとメソッド別ショートハンド
+
+グルーピングは標準の `route {}` に任せ、リーフにあたるメソッド別のショートハンド
+（`get` / `post` / `put` / `patch` / `delete` / `head` / `options`）を提供する。
+CRUD をひとまとまりに書ける。
+
+```kotlin
+routing {
+    route("/orgs/{orgId}/users") {
+        get<SearchUsersReq, List<User>>  { req -> userService.search(req.orgId, req.paging) }
+        post<CreateUserReq, User>(Created) { req -> userService.create(req.orgId, req.user) }
+
+        route("/{userId}") {
+            get<GetUserReq, User>       { req -> userService.find(req.userId) }
+            delete<DeleteUserReq, Unit> { req -> userService.delete(req.userId) }
+
+            // 完全形も同じ場所に書ける
+            put<UpdateUserReq, User> {
+                summary = "Update a user"
+                errors(Conflict to ErrorBody::class)
+                handle { req -> userService.update(req.userId, req.user) }
+            }
+        }
+    }
+}
+```
+
+親の `route()` で宣言したパス変数は `call.pathParameters` にすべて入るため、子の Req 型で
+`@Path val orgId` として受け取れる。OpenAPI のパスは `Route.path()` が系譜を辿って合成する
+ため、ネストしていても正しい完全パスが出る。
+
+ショートハンドは path を省略でき、省略時は現在の `Route` にそのまま生える。
+メソッドを動的に決めたい場合のために `endpoint(method, path)` も残す。
+
+**実装時に確認する項目:** 標準の `Route.get(path, body)` および Resources の
+`Route.get<T>(body)` とのオーバーロード解決。型引数の個数が異なる（本 DSL は 2 つ）ため
+解決できる見込みだが、実装の最初に検証する。
+
+### 5.5 標準 Route への落とし込み
 
 ```kotlin
 createChild(HttpMethodRouteSelector(method))          // 条件 3 を満たす
@@ -297,9 +339,28 @@ ContentNegotiation は経由しない。初版は JSON 専用とする。
 この方式を選ぶ理由は、実装が単純かつ確実であること、および OpenAPI のスキーマ生成と
 同じ `kotlinx.serialization` の descriptor を唯一の情報源にできることである。
 
-### 6.7 バインド失敗
+### 6.7 値が来なかったときの扱い
 
-欠落・型変換失敗は `RequestBindingException(field, reason)` として送出し、
+デフォルト値は Kotlin のデフォルト引数に任せる。Decoder が `decodeElementIndex` で
+その要素をスキップすれば、kotlinx.serialization がデフォルト値を埋める。
+
+| 宣言 | 値が来なかったとき |
+|---|---|
+| `@Query val page: Int = 1` | `1`（デフォルト値） |
+| `@Query val q: String?` | `null` |
+| `@Query val q: String? = null` | `null` |
+| `@Query val status: UserStatus` | `400`（必須） |
+
+2 行目は **kotlinx.serialization の通常の規則から意図的に外す**。通常「nullable かつ
+デフォルト値なし」は必須であり、明示的な `null` の送出を要求する。しかしクエリ・ヘッダ・
+クッキーでは「省略」と「`null` を明示」を区別できないため、欠落を `null` として扱う。
+
+この逸脱が適用されるのは `@Path` / `@Query` / `@Header` / `@Cookie` に限る。
+`@Body` の中身は通常の kotlinx.serialization の規則に従う。
+
+### 6.8 バインド失敗
+
+欠落（必須のもの）・型変換失敗は `RequestBindingException(violations)` として送出し、
 `400 Bad Request` にマッピングする。複数フィールドの失敗はまとめて報告する。
 
 ## 7. バリデーション
@@ -316,6 +377,32 @@ validate { req ->
 `reject` は違反を蓄積し、ブロック終了時に 1 件以上あれば
 `ValidationException(violations)` を送出する。既定のマッピングは
 `422 Unprocessable Content`。
+
+### 7.1 バリデーションライブラリの利用
+
+`validate` の中身は通常の Kotlin コードなので、任意のライブラリを使える。
+違反を `reject` に流すだけでよい。
+
+```kotlin
+// YAVI
+val searchUsersValidator = ValidatorBuilder.of<SearchUsersReq>()
+    .constraint(SearchUsersReq::q, "q") { it.lessThanOrEqual(64) }
+    .build()
+
+validate { req ->
+    searchUsersValidator.validate(req).forEach { v -> reject(v.name(), v.message()) }
+}
+```
+
+```kotlin
+// Jakarta Bean Validation (Hibernate Validator)
+validate { req ->
+    jakartaValidator.validate(req).forEach { v -> reject(v.propertyPath.toString(), v.message) }
+}
+```
+
+**アダプタは同梱しない。** core をどのバリデーションライブラリにも依存させないため、
+変換は利用者側の数行に委ねる。README とサンプルに上記の例を載せる。
 
 ## 8. レスポンスとステータス
 
@@ -358,15 +445,58 @@ throw Conflict("already exists", code = "USER_DUP")
 ### 9.2 ドメイン例外の登録
 
 ドメイン層をライブラリに依存させたくない場合は、マッピングを登録する。
+登録には 4 つの形を用意する。
 
 ```kotlin
-errors {
-    map<InsufficientBalance> { PaymentRequired to ErrorBody(it.message) }
-    fallback { InternalServerError to ErrorBody("internal error") }
+install(TypedRouting) {
+    errors {
+        // 1. ステータスのみ指定。ボディは既定の ErrorBody(e.message) になる
+        map<UserNotFound>(NotFound)
+        map<OrganizationNotFound>(NotFound)
+
+        // 2. 同じステータスに複数の例外をまとめて列挙する
+        map(
+            BadRequest,
+            IllegalArgumentException::class,
+            NumberFormatException::class,
+            DateTimeParseException::class,
+        )
+
+        // 3. ボディを作り込む
+        map<InsufficientBalance>(PaymentRequired) { e ->
+            ErrorBody(
+                message = e.message,
+                code = "INSUFFICIENT_BALANCE",
+                details = mapOf("shortfall" to e.shortfall),
+            )
+        }
+
+        // 4. ステータスも例外から決める
+        map<DownstreamError> { e ->
+            e.upstreamStatus to ErrorBody("upstream failed", code = e.service)
+        }
+
+        fallback(InternalServerError) { ErrorBody("internal error") }
+    }
 }
 ```
 
-解決順序は「`ApiException` → 登録されたマッピング（登録順） → `fallback`」。
+#### 解決順序
+
+**登録順ではなく例外のクラス階層で解決する。** 送出された例外のクラスから
+スーパークラスへ順に辿り、最初に見つかった登録を使う。
+
+上の例で `NumberFormatException` が送出された場合、`IllegalArgumentException` にも
+登録があるが、より近い `NumberFormatException` の登録が選ばれる。
+
+その他の規則:
+
+- **同一クラスへの重複登録は起動時に例外とする。** 後勝ちの暗黙挙動を作らない。
+- `ApiException` の派生は登録がなければ自身の `status` を使う。登録があればそちらが勝つ。
+- `RequestBindingException`（既定 400）と `ValidationException`（既定 422）も
+  登録によって上書きできる。
+- どれにも当たらなければ `fallback`。`fallback` は必ず 1 つ登録されている必要があり、
+  未登録なら既定の `500 / ErrorBody("internal error")` を使う。
 
 ### 9.3 OpenAPI への反映
 
@@ -466,11 +596,15 @@ Gradle のコンパイラプラグインによるコード推論は本 DSL で�
 1. **RequestDecoder の単体テスト** — 型カタログを網羅する。
    primitive / nullable / デフォルト値 / enum / value class / `List<T>` /
    カスタム serializer / グループ / ネストしたグループ / 欠落 / 型変換失敗 / 名前衝突
+   加えて、6.7 の「値が来なかったときの扱い」の 4 パターンを個別に検証する
 2. **エンドポイントの統合テスト** — `testApplication` で
-   bind → validate → handle → respond の一巡と、各エラー経路を検証する
-3. **公式プラグインとの共存テスト** — `authenticate {}` および
+   bind → validate → handle → respond の一巡と、各エラー経路を検証する。
+   ネストした `route {}` の下でパス変数が正しくバインドされることを含む
+3. **エラーマッピングの解決順序テスト** — 例外のクラス階層に沿った解決、
+   重複登録の起動時例外、`fallback` への到達を検証する
+4. **公式プラグインとの共存テスト** — `authenticate {}` および
    route スコープの `install(ContentNegotiation)` と併用して壊れないことを確認する
-4. **OpenAPI のスナップショットテスト** — 生成された JSON をゴールデンファイルと比較する
+5. **OpenAPI のスナップショットテスト** — 生成された JSON をゴールデンファイルと比較する
 
 ## 15. 将来の検討事項
 
@@ -481,6 +615,8 @@ Gradle のコンパイラプラグインによるコード推論は本 DSL で�
 - KSP によるバインダ生成（実行時コストの削減と、パス文字列と `@Path` の
   不一致のコンパイル時検出）
 - `webSocket()` / `sse()` に対する型付きラッパー
+- バリデーションライブラリのアダプタ artifact（`-yavi` / `-jakarta`）。
+  利用者側の変換が数行で済むため初版では作らない
 
 ## 16. 参照
 
