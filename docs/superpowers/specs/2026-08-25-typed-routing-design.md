@@ -16,9 +16,9 @@ Ktor 標準 routing の上に、型付きエンドポイント DSL を提供す�
 | # | 不満 | 本設計での解決 |
 |---|---|---|
 | ① | クエリ / パスパラメータ / JSON ボディで取得方法が不揃い。統一するには Resources が要るが、Resources とボディで受け取り方が違う | 単一の Req 型にすべての入力を集約し、`@Path` / `@Query` / `@Header` / `@Cookie` / `@Body` で由来を示す |
-| ② | バリデーションがしにくい | エンドポイント定義の `validate` ブロックに集約し、失敗を 422 に一元化 |
+| ② | バリデーションがしにくい | エンドポイント定義の `validate` ブロックに集約し、違反を 1 つの例外にまとめて送出 |
 | ③ | レスポンスを明示的に `call` に詰めなければならない | ハンドラの戻り値がレスポンスボディになる |
-| ④ | レスポンスボディのログが `call` の中で容易に取れない | `around` インターセプタが型付きの req / res を受け取る |
+| ④ | レスポンスボディのログが `call` の中で容易に取れない | `around` インターセプタが型付きの req / res を受け取る（エラーは StatusPages 側で扱う） |
 | ⑤ | OpenAPI の定義が書けない | エンドポイント定義から公式 `ktor-server-routing-openapi` の注釈を自動生成する |
 
 ## 2. 事前調査の結論
@@ -91,7 +91,7 @@ public val JsonSchemaAttributeKey: AttributeKey<JsonSchemaInference>
 - `kotlinx.serialization` の `Decoder` を用いたリクエストバインド
 - エンドポイント単位・アプリ単位のバリデーション
 - `around` インターセプタ
-- 例外 → HTTP ステータス / エラーボディのマッピング（StatusPages と併用可能）
+- バインド失敗・検証失敗を表す例外の定義（ステータスの決定は行わない）
 - 公式 `ktor-server-routing-openapi` へのブリッジ
 
 ### やらないこと
@@ -101,6 +101,7 @@ public val JsonSchemaAttributeKey: AttributeKey<JsonSchemaInference>
 - JVM 以外のプラットフォーム対応
 - JSON 以外のリクエストボディ形式（拡張余地は残すが初版では扱わない）
 - OpenAPI ドキュメントの生成・配信そのもの（公式実装に委ねる）
+- 例外 → HTTP ステータス / エラーボディのマッピング（StatusPages に委ねる）
 
 ## 4. モジュール構成
 
@@ -109,7 +110,7 @@ ktor-typed-routing/
 ├── settings.gradle.kts
 ├── build.gradle.kts
 ├── core/                                    # artifact: ktor-typed-routing-core
-│   └── src/main/kotlin/io/ktor/typed/routing/
+│   └── src/main/kotlin/jp/kukv/typedrouting/
 │       ├── Annotations.kt                   # @Path @Query @Header @Cookie @Body
 │       ├── RequestDecoder.kt                # AbstractDecoder 実装
 │       ├── RequestBinder.kt                 # suspend bind()
@@ -120,12 +121,9 @@ ktor-typed-routing/
 │       ├── TypedRouting.kt                  # ApplicationPlugin
 │       ├── Around.kt                        # インターセプタ
 │       ├── Validation.kt                    # validate / reject
-│       └── errors/
-│           ├── ApiException.kt              # 例外階層
-│           ├── ErrorBody.kt
-│           └── ErrorMapping.kt
+│       └── Exceptions.kt                    # Violation / RequestBindingException / ValidationException
 └── openapi/                                 # artifact: ktor-typed-routing-openapi
-    └── src/main/kotlin/io/ktor/typed/routing/openapi/
+    └── src/main/kotlin/jp/kukv/typedrouting/openapi/
         └── OpenApiBridge.kt
 ```
 
@@ -139,6 +137,9 @@ Gradle のプロジェクトパスは `:core` / `:openapi`、公開時の artifa
 `ktor-typed-routing-core` / `ktor-typed-routing-openapi` とする。
 ルートプロジェクトと同名のサブモジュールは作らない。
 
+名前空間は暫定で `jp.kukv` とする（group id: `jp.kukv`、パッケージ:
+`jp.kukv.typedrouting` / `jp.kukv.typedrouting.openapi`）。
+
 ## 5. 公開 API
 
 ### 5.1 プラグインの設定
@@ -146,14 +147,7 @@ Gradle のプロジェクトパスは `:core` / `:openapi`、公開時の artifa
 ```kotlin
 install(TypedRouting) {
     json = Json { ignoreUnknownKeys = true }
-
     around(RequestLogging)
-
-    errors {
-        map<InsufficientBalance> { PaymentRequired to ErrorBody(it.message) }
-        map<OptimisticLockError> { Conflict to ErrorBody("conflict") }
-        fallback { InternalServerError to ErrorBody("internal error") }
-    }
 }
 ```
 
@@ -369,8 +363,9 @@ ContentNegotiation は経由しない。初版は JSON 専用とする。
 
 ### 6.8 バインド失敗
 
-欠落（必須のもの）・型変換失敗は `RequestBindingException(violations)` として送出し、
-`400 Bad Request` にマッピングする。複数フィールドの失敗はまとめて報告する。
+欠落（必須のもの）・型変換失敗は `RequestBindingException(violations)` として送出する。
+複数フィールドの失敗は 1 つの例外にまとめて報告する。**ステータスコードは決めない。**
+StatusPages 側で `400 Bad Request` などに割り当てる（9.3 参照）。
 
 ## 7. バリデーション
 
@@ -384,8 +379,8 @@ validate { req ->
 ```
 
 `reject` は違反を蓄積し、ブロック終了時に 1 件以上あれば
-`ValidationException(violations)` を送出する。既定のマッピングは
-`422 Unprocessable Content`。
+`ValidationException(violations)` を送出する。**ステータスコードは決めない。**
+StatusPages 側で `422 Unprocessable Content` などに割り当てる（9.3 参照）。
 
 ### 7.1 バリデーションライブラリの利用
 
@@ -422,115 +417,91 @@ validate { req ->
 
 builder の `status` で上書きする。
 
-## 9. エラーマッピング
+## 9. エラー処理
 
-### 9.1 ライブラリ提供の例外階層
+**エラー処理は StatusPages に全面的に委ねる。** 本プラグインは例外を投げるだけで、
+ステータスコードやエラーボディの決定には一切関与しない。
 
-```kotlin
-sealed class ApiException(
-    val status: HttpStatusCode,
-    override val message: String,
-    val code: String? = null,
-) : Exception(message)
+### 9.1 その判断の理由
 
-class BadRequest(message: String, code: String? = null)          : ApiException(HttpStatusCode.BadRequest, message, code)
-class Unauthorized(message: String, code: String? = null)        : ApiException(HttpStatusCode.Unauthorized, message, code)
-class Forbidden(message: String, code: String? = null)           : ApiException(HttpStatusCode.Forbidden, message, code)
-class NotFound(message: String, code: String? = null)            : ApiException(HttpStatusCode.NotFound, message, code)
-class Conflict(message: String, code: String? = null)            : ApiException(HttpStatusCode.Conflict, message, code)
-class UnprocessableContent(message: String, code: String? = null): ApiException(HttpStatusCode.UnprocessableEntity, message, code)
-```
+**分断が起きない。** ルートが一致しなかった `404`、メソッド不一致の `405`、
+標準 `routing {}` のハンドラで起きた例外、auth の challenge 失敗は、いずれも
+本プラグインの外側で起きる。自前のマッピング機構を持つと、例外処理が必ず 2 箇所に分かれる。
 
-`RequestBindingException` と `ValidationException` はこの階層の外に置き、
-違反の詳細を保持したうえで既定で 400 / 422 にマッピングする。
-
-すぐに使える。
+**自前化の主要な価値が重複している。** StatusPages は既に例外のクラス階層で
+ハンドラを解決している (`StatusPages.kt:44-54`)。
 
 ```kotlin
-throw NotFound("user not found")
-throw Conflict("already exists", code = "USER_DUP")
-```
-
-### 9.2 ドメイン例外の登録
-
-ドメイン層をライブラリに依存させたくない場合は、マッピングを登録する。
-登録には 4 つの形を用意する。
-
-```kotlin
-install(TypedRouting) {
-    errors {
-        // 1. ステータスのみ指定。ボディは既定の ErrorBody(e.message) になる
-        map<UserNotFound>(NotFound)
-        map<OrganizationNotFound>(NotFound)
-
-        // 2. 同じステータスに複数の例外をまとめて列挙する
-        map(
-            BadRequest,
-            IllegalArgumentException::class,
-            NumberFormatException::class,
-            DateTimeParseException::class,
-        )
-
-        // 3. ボディを作り込む
-        map<InsufficientBalance>(PaymentRequired) { e ->
-            ErrorBody(
-                message = e.message,
-                code = "INSUFFICIENT_BALANCE",
-                details = mapOf("shortfall" to e.shortfall),
-            )
-        }
-
-        // 4. ステータスも例外から決める
-        map<DownstreamError> { e ->
-            e.upstreamStatus to ErrorBody("upstream failed", code = e.service)
-        }
-
-        fallback(InternalServerError) { ErrorBody("internal error") }
-    }
+fun findHandlerByValue(cause: Throwable): HandlerFunction? {
+    val keys = exceptions.keys.filter { cause.instanceOf(it) }
+    if (keys.isEmpty()) return null
+    if (keys.size == 1) return exceptions[keys.single()]
+    val key = selectNearestParentClass(cause, keys)
+    return exceptions[key]
 }
 ```
 
-#### 解決順序
+`on(CallFailed)` フックで捕まえるため、ルートハンドラ内で送出した例外はそのまま届く。
 
-**登録順ではなく例外のクラス階層で解決する。** 送出された例外のクラスから
-スーパークラスへ順に辿り、最初に見つかった登録を使う。
+**エラーボディを `around` で観測する要件がない。** どんなエラーが起きたかはログで足りる。
+これが自前化する唯一の実質的な利得だったため、放棄する。
 
-上の例で `NumberFormatException` が送出された場合、`IllegalArgumentException` にも
-登録があるが、より近い `NumberFormatException` の登録が選ばれる。
+### 9.2 core が提供するもの
 
-その他の規則:
-
-- **同一クラスへの重複登録は起動時に例外とする。** 後勝ちの暗黙挙動を作らない。
-- `ApiException` の派生は登録がなければ自身の `status` を使う。登録があればそちらが勝つ。
-- `RequestBindingException`（既定 400）と `ValidationException`（既定 422）も
-  登録によって上書きできる。
-- どれにも当たらなければ `fallback`。**`fallback` は省略できる**（9.3 参照）。
-
-### 9.3 StatusPages との住み分け
-
-エンドポイント内の例外は `handle {}` の内側で捕まえるため、マッピングできた時点で
-消費され StatusPages には届かない。両者を併用できるよう、`fallback` は省略可能とする。
-
-| `fallback` | マップできない例外の扱い |
-|---|---|
-| 登録あり | 自前で respond する。`around` からエラーボディが観測できる |
-| **登録なし（既定）** | **再スローする。** StatusPages や Ktor の既定に委ねる |
-
-既定を再スローとすることで、本プラグインを導入しても Ktor の既定挙動を壊さない。
-
-以下はエンドポイントの外側で起きるため、`fallback` の有無にかかわらず本プラグインでは
-扱えない。必要なら StatusPages を併用する。
-
-- ルートが一致しなかった `404`、メソッドが一致しなかった `405`
-- 標準 `routing {}` のハンドラで起きた例外
-- auth の challenge 失敗など、他プラグインが送出するもの
-
-### 9.4 OpenAPI への反映
-
-エラーレスポンスの宣言は builder に書く。実行時のマッピングとは独立している。
+バインドと検証は本プラグインの内部で起きるため、この 2 つの例外だけは core が定義する。
+いずれも違反の一覧を持ち、ステータスコードは持たない。
 
 ```kotlin
-errors(NotFound to ErrorBody::class, Conflict to ErrorBody::class)
+data class Violation(val path: String, val message: String)
+
+class RequestBindingException(val violations: List<Violation>) : Exception()
+class ValidationException(val violations: List<Violation>) : Exception()
+```
+
+エラーボディの形式は core では規定しない。RFC 9457 の Problem Details にするか
+独自形式にするかは利用者が決める。
+
+### 9.3 利用者側の設定
+
+```kotlin
+install(StatusPages) {
+    exception<RequestBindingException> { call, e ->
+        call.respond(BadRequest, ErrorBody("invalid request", e.violations))
+    }
+    exception<ValidationException> { call, e ->
+        call.respond(UnprocessableEntity, ErrorBody("validation failed", e.violations))
+    }
+
+    // ドメイン例外も同じ場所に並ぶ
+    exception<UserNotFound>        { call, e -> call.respond(NotFound, ErrorBody(e.message)) }
+    exception<InsufficientBalance> { call, e -> call.respond(PaymentRequired, ErrorBody(e.message)) }
+    exception<Throwable>           { call, _ -> call.respond(InternalServerError, ErrorBody("internal error")) }
+
+    // プラグインの外側の話も同じ場所に書ける
+    status(NotFound) { call, _ -> call.respond(NotFound, ErrorBody("not found")) }
+}
+```
+
+`ErrorBody` は利用者が定義する型である。この設定例は README に載せる。
+
+### 9.4 提供しないもの
+
+- `install(TypedRouting) { errors { ... } }` — 実行時のマッピング機構は持たない
+- `ApiException` / `NotFound` / `Conflict` などの例外階層 — 利用者のドメイン例外か、
+  好みのライブラリを使えばよい。ライブラリ固有の例外型を押し付けない
+- StatusPages 用の既定設定を入れる拡張関数 — core を StatusPages に依存させない。
+  上記 3 行は README からコピーすれば済む
+
+### 9.5 OpenAPI との関係
+
+builder の `errors(...)` は **OpenAPI のドキュメント宣言としてのみ**存在する。
+実行時のマッピングとは完全に独立しているため、役割が明確になる。
+
+```kotlin
+post<CreateUserReq, User> {
+    errors(Conflict to ErrorBody::class)   // ドキュメントに出るだけ
+    handle { req -> userService.create(req.orgId, req.user) }
+}
 ```
 
 ## 10. around インターセプタ
@@ -553,30 +524,54 @@ fun interface Around {
 | `request` | `Any?` | `proceed()` の後（バインド前は `null`） |
 | `status` | `HttpStatusCode?` | `proceed()` の後 |
 
-`request` と `status` が `proceed()` の後にしか埋まらないのは、バインドが
-`proceed()` の内側で起きるためである。バインド自体が失敗した場合、`request` は
-`null` のままで `status` は 400 になる。
+`request` と `status` が `proceed()` の後にしか埋まらないのは、バインド・検証・ハンドラの
+実行がいずれも `proceed()` の内側で起きるためである。
 
-`proceed()` の戻り値は、実際に `call.respond` されるボディである。正常時はハンドラの
-戻り値、エラー時はマッピング後のエラーボディが入る。`around` が別の値を返した場合、
-その値が respond されるボディを置き換える。値を観測するだけであれば `proceed()` の
+`proceed()` の戻り値は、`call.respond` される成功ボディである。`around` が別の値を返した
+場合、その値が respond されるボディを置き換える。値を観測するだけであれば `proceed()` の
 戻り値をそのまま返す。
 
-`around` は例外マッピングよりも外側に位置するため、**エラーレスポンスのボディも
-`proceed()` の戻り値として観測できる**。これが不満④に対する解となる。
+**例外は `proceed()` から素通しで送出される。** 本プラグインは例外を捕まえないため、
+`around` から見ると `proceed()` が throw する。ログのために捕まえた場合は、
+StatusPages に届くよう必ず再スローする。
+
+```kotlin
+around { ctx, proceed ->
+    log.info("--> {} {}", ctx.call.request.httpMethod, ctx.call.request.path())
+    try {
+        val res = proceed()
+        log.debug("res body: {}", res)
+        res
+    } catch (e: Throwable) {
+        log.warn("failed: {}", e.toString())   // どんなエラーが起きたかはここで分かる
+        throw e                                 // StatusPages に委ねる
+    }
+}
+```
+
+不満④に対しては、**成功レスポンスのボディを型付きのまま観測できる**ことで応える。
+エラーレスポンスのボディは StatusPages のハンドラ内で手元にあるため、
+ログが取れないケースはない。
 
 ## 11. 実行フロー
 
 ```
 RoutingHandler
   └─ around チェーン（アプリ → エンドポイント、外→内）
-       ├─ try
-       │    ├─ RequestBinder.bind(call, reqSerializer)   失敗 → 400
-       │    ├─ validate(req)                             失敗 → 422
-       │    ├─ handler(req): Res
-       │    └─ call.respond(status, res)
-       └─ catch: ErrorMapping.resolve(e) → call.respond(status, body)
+       ├─ RequestBinder.bind(call, reqSerializer)   失敗 → RequestBindingException
+       ├─ validate(req)                             失敗 → ValidationException
+       ├─ handler(req): Res
+       └─ call.respond(status, res)
+
+  例外はどこでも捕まえずに送出される
+       ↓
+  ルートパイプライン → アプリケーションパイプライン
+       ↓
+  StatusPages の on(CallFailed)
 ```
+
+本プラグインには try/catch がない。これが「エラー処理を StatusPages に委ねる」ことの
+実装上の意味である。
 
 ## 12. OpenAPI ブリッジ
 
@@ -627,9 +622,9 @@ Gradle のコンパイラプラグインによるコード推論は本 DSL で�
 2. **エンドポイントの統合テスト** — `testApplication` で
    bind → validate → handle → respond の一巡と、各エラー経路を検証する。
    ネストした `route {}` の下でパス変数が正しくバインドされることを含む
-3. **エラーマッピングの解決順序テスト** — 例外のクラス階層に沿った解決、
-   重複登録の起動時例外、`fallback` への到達、および `fallback` 未登録時に
-   例外が再スローされ StatusPages に到達することを検証する
+3. **例外の透過テスト** — バインド失敗・検証失敗・ハンドラ内の例外が
+   いずれも捕まえられずに送出され、StatusPages のハンドラに到達することを検証する。
+   `around` で捕まえて再スローした場合も同様であることを含む
 4. **公式プラグインとの共存テスト** — `authenticate {}` および
    route スコープの `install(ContentNegotiation)` と併用して壊れないことを確認する
 5. **OpenAPI のスナップショットテスト** — 生成された JSON をゴールデンファイルと比較する
