@@ -87,11 +87,11 @@ public val JsonSchemaAttributeKey: AttributeKey<JsonSchemaInference>
 
 ### やること
 
-- 型付きエンドポイント DSL（簡易形と完全形）
+- 型付きエンドポイント DSL（メソッド別の `get` / `post` / ... と汎用形の `route<Req, Res>`）
 - `kotlinx.serialization` の `Decoder` を用いたリクエストバインド
 - エンドポイント単位・アプリ単位のバリデーション
 - `around` インターセプタ
-- 例外 → HTTP ステータス / エラーボディのマッピング
+- 例外 → HTTP ステータス / エラーボディのマッピング（StatusPages と併用可能）
 - 公式 `ktor-server-routing-openapi` へのブリッジ
 
 ### やらないこと
@@ -116,7 +116,7 @@ ktor-typed-routing/
 │       ├── ParameterSource.kt               # 入力ソースの抽象
 │       ├── EndpointSpec.kt                  # エンドポイントのメタデータ
 │       ├── EndpointBuilder.kt               # 完全形の builder
-│       ├── EndpointDsl.kt                   # Route.endpoint() とメソッド別ショートハンド
+│       ├── EndpointDsl.kt                   # get / post / ... と汎用形の route<Req, Res>()
 │       ├── TypedRouting.kt                  # ApplicationPlugin
 │       ├── Around.kt                        # インターセプタ
 │       ├── Validation.kt                    # validate / reject
@@ -157,77 +157,84 @@ install(TypedRouting) {
 }
 ```
 
-### 5.2 簡易形
+### 5.2 エンドポイントの定義
 
-設定が不要な場合に使う。builder を持たないため、成功ステータスは引数で受ける。
+エンドポイントは常に builder を持つ。`summary` / `description` / `status` / `errors` /
+`validate` / `around` / `handle` のすべてが builder の中に集まる。**書き方は 1 つしかない。**
 
-```kotlin
-endpoint(Post, "/users", Created) { req: CreateUserReq -> userService.create(req) }
-endpoint(Get,  "/health")         { _: Unit -> HealthStatus.OK }
-```
-
-### 5.3 完全形
-
-メタデータを持つ場合に使う。成功ステータスを含むすべての宣言が builder に集まる。
+グルーピングは標準の `route {}` に任せ、リーフにあたるメソッド別の関数
+（`get` / `post` / `put` / `patch` / `delete` / `head` / `options`）を提供する。
+名前を Ktor 標準と揃えることで、標準 DSL と混在しても語彙が浮かない。
 
 ```kotlin
 routing {
     authenticate("jwt") {                        // 公式プラグインと共存する
-        endpoint<CreateUserReq, User>(Post, "/orgs/{orgId}/users") {
-            summary = "Create a user"
-            description = "Creates a user in the given organization."
-            status = Created
-            errors(Conflict to ErrorBody::class)
-            validate { if (it.user.name.isBlank()) reject("name", "must not be blank") }
-            around(MaskSensitiveFields)
-            handle { req -> userService.create(req.orgId, req.user) }
-        }
-    }
-}
-```
+        route("/orgs/{orgId}/users") {
+            get<SearchUsersReq, List<User>> {
+                summary = "Search users"
+                handle { req -> userService.search(req.orgId, req.paging) }
+            }
 
-簡易形と完全形で `status` の置き場所は異なるが、**それぞれの形に書き方は 1 つしかない**。
-簡易形には builder が存在せず、完全形には引数が存在しない。
-
-### 5.4 ネストとメソッド別ショートハンド
-
-グルーピングは標準の `route {}` に任せ、リーフにあたるメソッド別のショートハンド
-（`get` / `post` / `put` / `patch` / `delete` / `head` / `options`）を提供する。
-CRUD をひとまとまりに書ける。
-
-```kotlin
-routing {
-    route("/orgs/{orgId}/users") {
-        get<SearchUsersReq, List<User>>  { req -> userService.search(req.orgId, req.paging) }
-        post<CreateUserReq, User>(Created) { req -> userService.create(req.orgId, req.user) }
-
-        route("/{userId}") {
-            get<GetUserReq, User>       { req -> userService.find(req.userId) }
-            delete<DeleteUserReq, Unit> { req -> userService.delete(req.userId) }
-
-            // 完全形も同じ場所に書ける
-            put<UpdateUserReq, User> {
-                summary = "Update a user"
+            post<CreateUserReq, User> {
+                summary = "Create a user"
+                description = "Creates a user in the given organization."
+                status = Created
                 errors(Conflict to ErrorBody::class)
-                handle { req -> userService.update(req.userId, req.user) }
+                validate { if (it.user.name.isBlank()) reject("name", "must not be blank") }
+                around(MaskSensitiveFields)
+                handle { req -> userService.create(req.orgId, req.user) }
+            }
+
+            route("/{userId}") {
+                get<GetUserReq, User>       { handle { req -> userService.find(req.userId) } }
+                delete<DeleteUserReq, Unit> { handle { req -> userService.delete(req.userId) } }
             }
         }
     }
 }
 ```
 
-親の `route()` で宣言したパス変数は `call.pathParameters` にすべて入るため、子の Req 型で
-`@Path val orgId` として受け取れる。OpenAPI のパスは `Route.path()` が系譜を辿って合成する
-ため、ネストしていても正しい完全パスが出る。
+### 5.3 path 引数
 
-ショートハンドは path を省略でき、省略時は現在の `Route` にそのまま生える。
-メソッドを動的に決めたい場合のために `endpoint(method, path)` も残す。
+メソッド別の関数は path を取れる。省略した場合は現在の `Route` にそのまま生える。
 
-**実装時に確認する項目:** 標準の `Route.get(path, body)` および Resources の
-`Route.get<T>(body)` とのオーバーロード解決。型引数の個数が異なる（本 DSL は 2 つ）ため
-解決できる見込みだが、実装の最初に検証する。
+```kotlin
+route("/orgs/{orgId}/users") {
+    get<SearchUsersReq, List<User>> { ... }                 // 省略 = /orgs/{orgId}/users
+    get<GetUserReq, User>("/{userId}") { ... }              // /orgs/{orgId}/users/{userId}
+    post<BulkCreateReq, List<User>>("/bulk") { ... }        // /orgs/{orgId}/users/bulk
+}
+```
 
-### 5.5 標準 Route への落とし込み
+内部の組み立ては標準の `Route.get(path, body)` と同じで、
+`createRouteFromPath(path).createChild(HttpMethodRouteSelector(method))` である。
+
+### 5.4 汎用形
+
+メソッドを動的に決めたい場合のために、型引数を取る `route` を用意する。
+
+```kotlin
+route<CreateUserReq, User>(config.method, "/bulk") {
+    handle { req -> userService.create(req.orgId, req.user) }
+}
+```
+
+標準の `route(path) {}` はグルーピング（子を持つ中間ノード）、こちらはリーフ
+（ハンドラを持つ終端）で意味が異なるが、**型引数の有無で用途が判別できる**ため
+同じ名前を用いる。型引数のない `route` は常に標準のグルーピングである。
+
+### 5.5 ネストとパス変数
+
+親の `route()` で宣言したパス変数は `call.pathParameters` にすべて入るため、
+子の Req 型で `@Path val orgId` として受け取れる。OpenAPI のパスは `Route.path()` が
+系譜を辿って合成するため、ネストしていても正しい完全パスが出る。
+
+**実装時に確認する項目:** 標準の `Route.get(path, body)`、Resources の `Route.get<T>(body)`、
+および標準の `Route.route(path, build)` / `Route.route(path, method, build)` との
+オーバーロード解決。型引数の個数が異なる（本 DSL は 2 つ）ため解決できる見込みだが、
+実装の最初に検証する。曖昧になる場合は汎用形の名前を再検討する。
+
+### 5.6 標準 Route への落とし込み
 
 ```kotlin
 createChild(HttpMethodRouteSelector(method))          // 条件 3 を満たす
@@ -258,8 +265,10 @@ Req 型に `Unit` を指定した場合、バインドを行わずハンドラ�
 `Unit` は `@Serializable` ではないため、Decoder は起動しない。
 
 ```kotlin
-endpoint(Get, "/health") { _: Unit -> HealthStatus.OK }
+get<Unit, HealthStatus>("/health") { handle { HealthStatus.OK } }
 ```
+
+Req が `Unit` の場合、`handle` のラムダは引数を取らない。
 
 ### 6.3 入力ソースの対応
 
@@ -411,7 +420,7 @@ validate { req ->
 - 戻り値が `Unit` の場合: `204 No Content`（ボディを書かない）
 - それ以外: `200 OK`
 
-簡易形では第 3 引数、完全形では builder の `status` で上書きする。
+builder の `status` で上書きする。
 
 ## 9. エラーマッピング
 
@@ -495,10 +504,28 @@ install(TypedRouting) {
 - `ApiException` の派生は登録がなければ自身の `status` を使う。登録があればそちらが勝つ。
 - `RequestBindingException`（既定 400）と `ValidationException`（既定 422）も
   登録によって上書きできる。
-- どれにも当たらなければ `fallback`。`fallback` は必ず 1 つ登録されている必要があり、
-  未登録なら既定の `500 / ErrorBody("internal error")` を使う。
+- どれにも当たらなければ `fallback`。**`fallback` は省略できる**（9.3 参照）。
 
-### 9.3 OpenAPI への反映
+### 9.3 StatusPages との住み分け
+
+エンドポイント内の例外は `handle {}` の内側で捕まえるため、マッピングできた時点で
+消費され StatusPages には届かない。両者を併用できるよう、`fallback` は省略可能とする。
+
+| `fallback` | マップできない例外の扱い |
+|---|---|
+| 登録あり | 自前で respond する。`around` からエラーボディが観測できる |
+| **登録なし（既定）** | **再スローする。** StatusPages や Ktor の既定に委ねる |
+
+既定を再スローとすることで、本プラグインを導入しても Ktor の既定挙動を壊さない。
+
+以下はエンドポイントの外側で起きるため、`fallback` の有無にかかわらず本プラグインでは
+扱えない。必要なら StatusPages を併用する。
+
+- ルートが一致しなかった `404`、メソッドが一致しなかった `405`
+- 標準 `routing {}` のハンドラで起きた例外
+- auth の challenge 失敗など、他プラグインが送出するもの
+
+### 9.4 OpenAPI への反映
 
 エラーレスポンスの宣言は builder に書く。実行時のマッピングとは独立している。
 
@@ -589,7 +616,7 @@ Gradle のコンパイラプラグインによるコード推論は本 DSL で�
 - `ktor-server-metrics` / `metrics-micrometer` のルート単位メトリクス
 - `openAPI()` / `swaggerUI()`
 
-`routing {}` の中で標準 DSL と `endpoint()` を混在させられるため、段階的に移行できる。
+`routing {}` の中で標準 DSL と本 DSL を混在させられるため、段階的に移行できる。
 
 ## 14. テスト戦略
 
@@ -601,7 +628,8 @@ Gradle のコンパイラプラグインによるコード推論は本 DSL で�
    bind → validate → handle → respond の一巡と、各エラー経路を検証する。
    ネストした `route {}` の下でパス変数が正しくバインドされることを含む
 3. **エラーマッピングの解決順序テスト** — 例外のクラス階層に沿った解決、
-   重複登録の起動時例外、`fallback` への到達を検証する
+   重複登録の起動時例外、`fallback` への到達、および `fallback` 未登録時に
+   例外が再スローされ StatusPages に到達することを検証する
 4. **公式プラグインとの共存テスト** — `authenticate {}` および
    route スコープの `install(ContentNegotiation)` と併用して壊れないことを確認する
 5. **OpenAPI のスナップショットテスト** — 生成された JSON をゴールデンファイルと比較する
