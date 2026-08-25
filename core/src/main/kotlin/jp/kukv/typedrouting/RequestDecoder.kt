@@ -54,20 +54,41 @@ internal class ObjectDecoder(
         return ctx.sources.sourceFor(origin.kind).getAll(prefix + origin.name)
     }
 
-    /** グループは子要素のどれか 1 つでも値があれば「存在する」とみなす。 */
+    /**
+     * グループは子孫のどれか 1 つでも値があれば「存在する」とみなす。
+     * 子がまたグループの場合は接頭辞を合成して再帰する。子グループを無条件に
+     * 「値あり」とすると、空のグループを内包するだけの nullable グループが
+     * 決して null にならない。
+     */
     private fun groupHasAnyValue(elementIndex: Int): Boolean {
         val origin = originAt(elementIndex)
-        val child = target.getElementDescriptor(elementIndex)
-        val source = ctx.sources.sourceFor(origin.kind)
-        val childPrefix = prefix + origin.prefix
-        return (0 until child.elementsCount).any { i ->
-            if (child.isGroup(i, origin.kind)) {
-                true
+        return descriptorHasAnyValue(
+            descriptor = target.getElementDescriptor(elementIndex),
+            source = ctx.sources.sourceFor(origin.kind),
+            prefix = prefix + origin.prefix,
+            kind = origin.kind,
+        )
+    }
+
+    private fun descriptorHasAnyValue(
+        descriptor: SerialDescriptor,
+        source: ParameterSource,
+        prefix: String,
+        kind: SourceKind,
+    ): Boolean =
+        (0 until descriptor.elementsCount).any { i ->
+            val childOrigin = descriptor.originOf(i, kind)
+            if (descriptor.isGroup(i, kind)) {
+                descriptorHasAnyValue(
+                    descriptor = descriptor.getElementDescriptor(i),
+                    source = source,
+                    prefix = prefix + childOrigin.prefix,
+                    kind = kind,
+                )
             } else {
-                source.getAll(childPrefix + child.originOf(i, origin.kind).name) != null
+                source.getAll(prefix + childOrigin.name) != null
             }
         }
-    }
 
     override fun decodeElementIndex(descriptor: SerialDescriptor): Int {
         while (true) {

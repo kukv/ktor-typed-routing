@@ -50,6 +50,15 @@ class EndpointSpecTest {
     )
 
     @Serializable
+    private data class Payload(val name: String)
+
+    @Serializable
+    private data class TwoBodies(
+        @Body val first: Payload,
+        @Body val second: Payload,
+    )
+
+    @Serializable
     private data class Fine(
         @Query val paging: Paging,
         @Query(prefix = "r.") val range: Range,
@@ -95,6 +104,15 @@ class EndpointSpecTest {
         }
         assertTrue(e.message!!.contains("token"))
         assertTrue(e.message!!.contains("structural"))
+    }
+
+    @Test
+    fun `two body parameters are rejected`() {
+        val e = assertFailsWith<IllegalStateException> {
+            serializer<TwoBodies>().descriptor.validateBindingShape()
+        }
+        assertTrue(e.message!!.contains("second"))
+        assertTrue(e.message!!.contains("@Body"))
     }
 
     @Test
