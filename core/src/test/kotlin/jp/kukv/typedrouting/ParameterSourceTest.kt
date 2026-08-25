@@ -23,6 +23,21 @@ class ParameterSourceTest {
     }
 
     @Test
+    fun `parameters source distinguishes empty string from absent`() {
+        val source = ParameterSource.of(parametersOf("tags", listOf("")))
+
+        assertEquals(listOf(""), source.getAll("tags"))
+        assertNull(source.getAll("missing"))
+    }
+
+    @Test
+    fun `parameters source handles multiple values including empty`() {
+        val source = ParameterSource.of(parametersOf("tags", listOf("a", "", "b")))
+
+        assertEquals(listOf("a", "", "b"), source.getAll("tags"))
+    }
+
+    @Test
     fun `request sources read path query header and cookie`() = testApplication {
         application {
             routing {
@@ -47,5 +62,53 @@ class ParameterSourceTest {
             header("Cookie", "session=abc")
         }
         assertEquals("[42]|[hello]|[t-1]|[abc]", response.bodyAsText())
+    }
+
+    @Test
+    fun `request sources distinguish empty query value from absent`() = testApplication {
+        application {
+            routing {
+                route("/test") {
+                    get {
+                        val sources = call.requestSources()
+                        call.respondText(
+                            buildString {
+                                append("present=").append(sources.query.getAll("present"))
+                                append("|absent=").append(sources.query.getAll("absent"))
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        val response = client.get("/test?present=")
+        val result = response.bodyAsText()
+        assertEquals("present=[]|absent=null", result)
+    }
+
+    @Test
+    fun `request sources distinguish empty header value from absent`() = testApplication {
+        application {
+            routing {
+                route("/test") {
+                    get {
+                        val sources = call.requestSources()
+                        call.respondText(
+                            buildString {
+                                append("present=").append(sources.header.getAll("X-Present"))
+                                append("|absent=").append(sources.header.getAll("X-Absent"))
+                            },
+                        )
+                    }
+                }
+            }
+        }
+
+        val response = client.get("/test") {
+            header("X-Present", "")
+        }
+        val result = response.bodyAsText()
+        assertEquals("present=[]|absent=null", result)
     }
 }
