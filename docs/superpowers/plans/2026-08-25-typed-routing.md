@@ -571,8 +571,12 @@ git commit -m "feat: 入力ソースの抽象 ParameterSource を追加"
 
 判定規則（spec 6.4）:
 
-- `StructureKind.CLASS` / `StructureKind.OBJECT` → グループ（再帰）
-- それ以外（`PrimitiveKind` / `SerialKind.ENUM` / `StructureKind.LIST` / インライン） → スカラー
+- `StructureKind.CLASS` / `StructureKind.OBJECT` **かつ `isInline` でない** → グループ（再帰）
+- それ以外（`PrimitiveKind` / `SerialKind.ENUM` / `StructureKind.LIST`） → スカラー
+
+**value class に注意。** `@JvmInline value class UserId(val raw: Long)` の descriptor は
+`kind = StructureKind.CLASS` かつ `isInline = true` である。`isInline` を見ないと
+value class がグループとして再帰され、内側の `raw` をパラメータ名として探しに行ってしまう。
 
 - [ ] **Step 1: 失敗するテストを書く**
 
@@ -723,10 +727,15 @@ internal fun SerialDescriptor.originOf(index: Int, inherited: SourceKind? = null
  *
  * 構造型（data class / object）だけがグループになる。
  * enum / value class / List / カスタム serializer はスカラーとして扱う。
+ * value class は kind が `StructureKind.CLASS` になるため `isInline` で除外する。
  */
 internal fun SerialDescriptor.isGroup(index: Int, inherited: SourceKind? = null): Boolean {
     if (originOf(index, inherited).kind == SourceKind.BODY) return false
-    return when (getElementDescriptor(index).kind) {
+    val element = getElementDescriptor(index)
+    // value class は kind = StructureKind.CLASS だが isInline = true。
+    // 除外しないと value class がグループとして再帰されてしまう。
+    if (element.isInline) return false
+    return when (element.kind) {
         StructureKind.CLASS, StructureKind.OBJECT -> true
         else -> false
     }
@@ -2699,7 +2708,7 @@ Ktor 3.5.2 のスキーマ推論の公開入口は `JsonSchemaInference.buildSch
 | 判定 | reflection での取り方 |
 |---|---|
 | 由来 | `KProperty1.annotations` から `@Path` / `@Query` / `@Header` / `@Cookie` / `@Body` を探す |
-| グループかどうか | `classifier` が `KClass` で、`isData` が true かつ `@Body` でない |
+| グループかどうか | `serializer(kType).descriptor` の `kind` が `CLASS`/`OBJECT` かつ `isInline` でない（`:core` と同一規則） |
 | 必須かどうか | プライマリコンストラクタの対応する `KParameter.isOptional` が false、かつ `returnType.isMarkedNullable` が false |
 | 宣言順 | `KClass.primaryConstructor!!.parameters` の順（`memberProperties` は順序が保証されない） |
 
@@ -2808,6 +2817,8 @@ import jp.kukv.typedrouting.Cookie
 import jp.kukv.typedrouting.Header
 import jp.kukv.typedrouting.Path
 import jp.kukv.typedrouting.Query
+import kotlinx.serialization.descriptors.StructureKind
+import kotlinx.serialization.serializer
 import kotlin.reflect.KClass
 import kotlin.reflect.KParameter
 import kotlin.reflect.KProperty1
@@ -2859,10 +2870,18 @@ private fun KClass<*>.orderedProperties(): List<Pair<KProperty1<*, *>, KParamete
     }
 }
 
-/** この型がグループとして再帰的に展開されるかどうか。 */
+/**
+ * この型がグループとして再帰的に展開されるかどうか。
+ *
+ * `:core` の `isGroup` とまったく同じ規則にするため、`KClass` の性質ではなく
+ * `SerialDescriptor` の `kind` と `isInline` で判定する。`isData` で判定すると、
+ * 非 data の `@Serializable class` が `:core` ではグループ、`:openapi` ではスカラーになり、
+ * 2 つのモジュールで挙動が食い違う。
+ */
 private fun KType.isGroupType(): Boolean {
-    val classifier = classifier as? KClass<*> ?: return false
-    return classifier.isData && classifier.primaryConstructor != null
+    val descriptor = runCatching { serializer(this).descriptor }.getOrNull() ?: return false
+    if (descriptor.isInline) return false
+    return descriptor.kind == StructureKind.CLASS || descriptor.kind == StructureKind.OBJECT
 }
 
 /**

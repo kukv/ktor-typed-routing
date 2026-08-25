@@ -282,13 +282,21 @@ Req が `Unit` の場合、`handle` のラムダは引数を取らない。
 |---|---|---|
 | `Int`, `String`, `ULong` | `PrimitiveKind` | スカラー |
 | `UserStatus`（enum） | `SerialKind.ENUM` | スカラー |
-| `UserId`（value class） | inline → `PrimitiveKind` | スカラー |
+| `UserId`（value class） | `StructureKind.CLASS` + `isInline` | スカラー |
 | `LocalDate`（カスタム serializer） | `PrimitiveKind.STRING` | スカラー |
 | `List<String>` | `StructureKind.LIST` | 複数値スカラー（`?tags=a&tags=b`） |
-| `Paging`（data class） | `StructureKind.CLASS` / `OBJECT` | グループ（再帰） |
+| `Paging`（data class） | `CLASS` / `OBJECT`（`isInline` でない） | グループ（再帰） |
 
-この規則により、value class / enum / カスタム serializer / コレクションが
-特別扱いなしに動作する。
+この規則により、enum / カスタム serializer / コレクションが特別扱いなしに動作する。
+
+**value class だけは明示が要る。** `@JvmInline value class` の descriptor は
+`kind = StructureKind.CLASS` かつ `isInline = true` である。`isInline` を見ないと
+value class がグループとして再帰され、内側のプロパティ名（`raw` など）を
+パラメータとして探しに行ってしまう。グループ判定は
+**「`CLASS` または `OBJECT` かつ `isInline` でない」** とする。
+
+この規則は `:core`（`SerialDescriptor` 経由）と `:openapi`（`KType` から
+`serializer(kType).descriptor` を得て判定）の両方で同一でなければならない。
 
 ### 6.5 グルーピング
 
