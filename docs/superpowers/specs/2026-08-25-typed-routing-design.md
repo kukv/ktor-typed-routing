@@ -153,7 +153,7 @@ install(TypedRouting) {
 
 ### 5.2 エンドポイントの定義
 
-エンドポイントは常に builder を持つ。`summary` / `description` / `status` / `errors` /
+エンドポイントは常に builder を持つ。`summary` / `description` / `status` / `error` /
 `validate` / `around` / `handle` のすべてが builder の中に集まる。**書き方は 1 つしかない。**
 
 グルーピングは標準の `route {}` に任せ、リーフにあたるメソッド別の関数
@@ -173,7 +173,7 @@ routing {
                 summary = "Create a user"
                 description = "Creates a user in the given organization."
                 status = Created
-                errors(Conflict to ErrorBody::class)
+                error<ErrorBody>(Conflict)
                 validate { if (it.user.name.isBlank()) reject("name", "must not be blank") }
                 around(MaskSensitiveFields)
                 handle { req -> userService.create(req.orgId, req.user) }
@@ -246,8 +246,8 @@ createChild(HttpMethodRouteSelector(method))          // 条件 3 を満たす
 ```kotlin
 @SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Path(val name: String = "")
 @SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Query(val name: String = "", val prefix: String = "")
-@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Header(val name: String = "")
-@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Cookie(val name: String = "")
+@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Header(val name: String = "", val prefix: String = "")
+@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Cookie(val name: String = "", val prefix: String = "")
 @SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Body
 ```
 
@@ -494,12 +494,12 @@ install(StatusPages) {
 
 ### 9.5 OpenAPI との関係
 
-builder の `errors(...)` は **OpenAPI のドキュメント宣言としてのみ**存在する。
+builder の `error<T>(status)` は **OpenAPI のドキュメント宣言としてのみ**存在する。
 実行時のマッピングとは完全に独立しているため、役割が明確になる。
 
 ```kotlin
 post<CreateUserReq, User> {
-    errors(Conflict to ErrorBody::class)   // ドキュメントに出るだけ
+    error<ErrorBody>(Conflict)   // ドキュメントに出るだけ
     handle { req -> userService.create(req.orgId, req.user) }
 }
 ```
@@ -582,7 +582,48 @@ RoutingHandler
   OpenAPI の `parameters` に展開する。グループは接頭辞の規則に従って平坦化する。
 - `@Body` の要素と Res 型は `requestBody` / `responses` のスキーマにする。
   スキーマ推論は公式の `KotlinxSerializerJsonSchemaInference` を使う。
-- builder の `summary` / `description` / `status` / `errors` を対応する項目に反映する。
+- builder の `summary` / `description` / `status` / `error` を対応する項目に反映する。
+
+### 12.1 確認済みの公式 API（Ktor 3.5.2）
+
+`javap` で確認した形。`Operation.Builder` は入れ子のビルダになっている。
+
+```
+io.ktor.openapi.Operation$Builder : JsonSchemaInference
+  var summary: String?;  var description: String?
+  fun parameters(block: Parameters.Builder.() -> Unit)
+  fun requestBody(block: RequestBody.Builder.() -> Unit)
+  fun responses(block: Responses.Builder.() -> Unit)
+
+io.ktor.openapi.Parameters$Builder
+  fun path / query / header / cookie (name: String, block: Parameter.Builder.() -> Unit)
+
+io.ktor.openapi.Parameter$Builder : JsonSchemaInference
+  var required: Boolean;  var description: String?;  var schema: JsonSchema?
+
+io.ktor.openapi.RequestBody$Builder : JsonSchemaInference
+  var required: Boolean;  var schema: JsonSchema?
+
+io.ktor.openapi.Responses$Builder
+  fun response(code: Int, block: Response.Builder.() -> Unit)
+
+io.ktor.openapi.JsonSchemaInference
+  fun buildSchema(type: KType): JsonSchema
+```
+
+### 12.2 `:openapi` が `KType` を入力にする理由
+
+**スキーマ推論の公開入口は `buildSchema(KType)` だけである。**
+`KotlinxSerializerJsonSchemaInference.buildSchemaFromDescriptor` も存在するが
+`internal` で外から呼べない。
+
+したがって `:openapi` は `SerialDescriptor` ではなく `KType` を入力とし、
+アノテーションの読み取り・グループの平坦化・必須判定も `kotlin-reflect` で行う。
+`EndpointSpec` は Req / Res の `KType` を保持する。
+
+`kotlin-reflect` を使うのは `:openapi` だけである。`:core` は
+`SerialDescriptor` だけで完結し、reflection を使わない。両者は同じ入力に対して
+同じパラメータ名とグループ展開を返さなければならず、テストで突き合わせる。
 
 ドキュメントの組み立て・`$ref` 解決・スキーマ命名・YAML/JSON 出力・Swagger UI 配信は
 公式実装に委ねる。
