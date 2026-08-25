@@ -369,6 +369,21 @@ ContentNegotiation は経由しない。初版は JSON 専用とする。
 この逸脱が適用されるのは `@Path` / `@Query` / `@Header` / `@Cookie` に限る。
 `@Body` の中身は通常の kotlinx.serialization の規則に従う。
 
+### 6.7.1 グループに対する適用
+
+グループ（構造型の要素）にも同じ規則を適用する。子要素の値が 1 つでもあるかどうかで
+「値が来た」を判定する。
+
+| 宣言 | 子の値が 1 つ以上ある | 子の値が 1 つも無い |
+|---|---|---|
+| `@Query val paging: Paging` | 展開する | 子それぞれの既定値で埋める |
+| `@Query val paging: Paging = Paging(1, 20)` | 展開する | グループごと既定値を使う |
+| `@Query val paging: Paging?` | 展開する | **`null`** |
+
+**グループ自体が任意（既定値あり）または nullable の場合、その子孫はすべて任意である。**
+サーバが省略を受け付けるため、OpenAPI も子を required と宣言してはならない。
+`:openapi` の平坦化はこの継承を実装しなければならない。
+
 ### 6.8 バインド失敗
 
 欠落（必須のもの）・型変換失敗は `RequestBindingException(violations)` として送出する。
