@@ -11,6 +11,8 @@ import io.ktor.server.auth.basic
 import io.ktor.server.auth.Authentication
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
+import io.ktor.server.response.respond
+import io.ktor.server.routing.get
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
@@ -23,6 +25,9 @@ import kotlin.test.assertEquals
 class InteropTest {
     @Serializable
     data class Req(@Path val id: Long)
+
+    @Serializable
+    data class StandardBody(val value: String)
 
     @OptIn(ExperimentalEncodingApi::class)
     @Test
@@ -61,12 +66,19 @@ class InteropTest {
                 route("/items/{id}") {
                     install(ContentNegotiation) { json() }
                     get<Req, String> { handle { req -> "item ${req.id}" } }
+                    get("/standard") { call.respond(StandardBody("standard")) }
                 }
             }
         }
 
-        val response = client.get("/items/1")
-        assertEquals(HttpStatusCode.OK, response.status)
-        assertEquals("\"item 1\"", response.bodyAsText())
+        val typed = client.get("/items/1")
+        assertEquals(HttpStatusCode.OK, typed.status)
+        assertEquals("\"item 1\"", typed.bodyAsText())
+
+        // 標準の respond(obj) は ContentNegotiation がないと 406 Not Acceptable になる
+        // （PROBE で確認済み）。install があるからこそ、こちらも正しく JSON で応答する。
+        val standard = client.get("/items/1/standard")
+        assertEquals(HttpStatusCode.OK, standard.status)
+        assertEquals("""{"value":"standard"}""", standard.bodyAsText())
     }
 }
