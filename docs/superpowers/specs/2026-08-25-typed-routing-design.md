@@ -605,6 +605,9 @@ RoutingHandler
   OpenAPI の `parameters` に展開する。グループは接頭辞の規則に従って平坦化する。
 - `@Body` の要素と Res 型は `requestBody` / `responses` のスキーマにする。
   スキーマ推論は公式の `KotlinxSerializerJsonSchemaInference` を使う。
+- **成功レスポンスは `Res = Unit`（スキーマなし）でも必ず 1 件出す。**
+  OAS 3.1 は Responses Object に最低 1 つの応答コードを要求するため、
+  `204 No Content` のエンドポイントで `responses` が空になってはならない。
 - builder の `summary` / `description` / `status` / `error` を対応する項目に反映する。
 
 ### 12.1 確認済みの公式 API（Ktor 3.5.2）

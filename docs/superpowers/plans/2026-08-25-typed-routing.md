@@ -3187,10 +3187,11 @@ private fun Route.applyEndpointSpec(spec: EndpointSpec) {
         }
 
         responses {
-            spec.responseType?.let { responseType ->
-                response(spec.status.value) {
-                    schema = buildSchema(responseType)
-                }
+            // 成功レスポンスは responseType が null（Res = Unit）でも必ず 1 件出す。
+            // OAS 3.1 は Responses Object に最低 1 つの応答コードを要求するため、
+            // ここを条件付きにすると 204 のエンドポイントが不正なドキュメントになる。
+            response(spec.status.value) {
+                spec.responseType?.let { schema = buildSchema(it) }
             }
             spec.errors.forEach { (status, errorType) ->
                 response(status.value) {
