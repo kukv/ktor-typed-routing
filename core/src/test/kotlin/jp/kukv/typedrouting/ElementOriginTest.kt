@@ -4,7 +4,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.serializer
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class ElementOriginTest {
@@ -30,6 +32,15 @@ class ElementOriginTest {
         @Header("X-Trace-Id") val traceId: String?,
         @Cookie val session: String?,
         @Body val payload: String,
+    )
+
+    @Serializable
+    private data class NoAnnotation(val plain: String)
+
+    @Serializable
+    private data class PrefixedHeaderAndCookie(
+        @Header(prefix = "h.") val meta: Paging,
+        @Cookie(prefix = "c.") val prefs: Paging,
     )
 
     private val descriptor = serializer<Sample>().descriptor
@@ -73,5 +84,34 @@ class ElementOriginTest {
         assertFalse(descriptor.isGroup(5), "enum is scalar")
         assertFalse(descriptor.isGroup(6), "value class is scalar")
         assertFalse(descriptor.isGroup(9), "body is never a group")
+    }
+
+    @Test
+    fun `sourceFor returns the matching source and Empty for BODY`() {
+        val path = ParameterSource { listOf("path-$it") }
+        val query = ParameterSource { listOf("query-$it") }
+        val header = ParameterSource { listOf("header-$it") }
+        val cookie = ParameterSource { listOf("cookie-$it") }
+        val sources = RequestSources(path, query, header, cookie)
+
+        assertSame(path, sources.sourceFor(SourceKind.PATH))
+        assertSame(query, sources.sourceFor(SourceKind.QUERY))
+        assertSame(header, sources.sourceFor(SourceKind.HEADER))
+        assertSame(cookie, sources.sourceFor(SourceKind.COOKIE))
+        assertSame(ParameterSource.Empty, sources.sourceFor(SourceKind.BODY))
+    }
+
+    @Test
+    fun `root element without a source annotation fails loudly`() {
+        val noAnnotation = serializer<NoAnnotation>().descriptor
+        val exception = assertFailsWith<IllegalStateException> { noAnnotation.originOf(0) }
+        assertTrue(exception.message!!.contains("plain"), "message should mention the offending property")
+    }
+
+    @Test
+    fun `header and cookie prefixes are carried on the origin`() {
+        val d = serializer<PrefixedHeaderAndCookie>().descriptor
+        assertEquals("h.", d.originOf(0).prefix)
+        assertEquals("c.", d.originOf(1).prefix)
     }
 }
