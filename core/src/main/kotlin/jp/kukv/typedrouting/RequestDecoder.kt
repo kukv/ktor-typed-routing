@@ -40,6 +40,11 @@ internal class ObjectDecoder(
     private var index = -1
     private var pending: List<String>? = null
 
+    private companion object {
+        /** グループを展開することを示す番兵。グループ自身は文字列値を持たない。 */
+        val GROUP_PRESENT: List<String> = emptyList()
+    }
+
     private fun originAt(elementIndex: Int): ElementOrigin =
         target.originOf(elementIndex, ownKind)
 
@@ -72,8 +77,17 @@ internal class ObjectDecoder(
             val origin = originAt(index)
             if (origin.kind == SourceKind.BODY) return index
             if (descriptor.isGroup(index, ownKind)) {
-                if (groupHasAnyValue(index)) return index
+                // グループ自身は 1 つの値に対応しないが、nullable な要素では
+                // decodeNotNullMark() が pending を見るため、ここで必ず設定する。
+                // 設定を怠ると直前の要素が残した pending を読んでしまう。
+                if (groupHasAnyValue(index)) {
+                    pending = GROUP_PRESENT
+                    return index
+                }
                 if (descriptor.isElementOptional(index)) continue
+                // 値が 1 つも無い。nullable なら null、そうでなければ展開して
+                // 子それぞれの既定値の補完（または欠落報告）を kotlinx に任せる。
+                pending = if (descriptor.getElementDescriptor(index).isNullable) null else GROUP_PRESENT
                 return index
             }
 
