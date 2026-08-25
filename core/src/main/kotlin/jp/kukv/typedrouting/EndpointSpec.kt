@@ -37,7 +37,7 @@ public val EndpointSpecKey: AttributeKey<EndpointSpec> = AttributeKey("TypedRout
  * バインド対象の形を検証する。違反は起動時に例外にする。
  *
  * - グループの中に `@Body` を書くことはできない
- * - `@Body` はスカラー（プリミティブ / String / enum）であってはならない
+ * - `@Body` はスカラー（プリミティブ / String / enum / value class）であってはならない
  * - 平坦化した結果、同じソースで同じ名前になる要素があってはならない
  */
 @OptIn(ExperimentalSerializationApi::class)
@@ -57,9 +57,16 @@ internal fun SerialDescriptor.validateBindingShape() {
                 // スカラーの @Body を復号すると kotlinx は decodeStringElement などを呼ぶ。
                 // AbstractDecoder ではそれらが final で decodeString() に委譲されるため、
                 // ボディではなく直前の要素の値を静かに読んでしまう。起動時に弾く。
-                val bodyKind = descriptor.getElementDescriptor(i).kind
-                check(bodyKind !is PrimitiveKind && bodyKind != SerialKind.ENUM) {
-                    "@Body must be a structural type (at '$path' of '$serialName'), but it is $bodyKind. " +
+                // value class は kind こそ StructureKind.CLASS だが内側のプリミティブとして
+                // 直列化され、decodeInlineElement 経由で同じ失敗をするため isInline も弾く
+                // （グループ判定の isGroup と同じ除外規則）。
+                val bodyDescriptor = descriptor.getElementDescriptor(i)
+                val isScalar = bodyDescriptor.kind is PrimitiveKind ||
+                    bodyDescriptor.kind == SerialKind.ENUM ||
+                    bodyDescriptor.isInline
+                check(!isScalar) {
+                    "@Body must be a structural type (at '$path' of '$serialName'), but it is " +
+                        (if (bodyDescriptor.isInline) "an inline value class" else "${bodyDescriptor.kind}") + ". " +
                         "Wrap the value in a @Serializable class."
                 }
                 continue

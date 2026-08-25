@@ -39,6 +39,16 @@ class EndpointSpecTest {
     @Serializable
     private data class EnumBody(@Body val kind: Kind)
 
+    @JvmInline
+    @Serializable
+    private value class Token(val raw: String)
+
+    @Serializable
+    private data class ValueClassBody(
+        @Query val page: Int,
+        @Body val token: Token,
+    )
+
     @Serializable
     private data class Fine(
         @Query val paging: Paging,
@@ -76,6 +86,15 @@ class EndpointSpecTest {
             serializer<EnumBody>().descriptor.validateBindingShape()
         }
         assertTrue(e.message!!.contains("kind"))
+    }
+
+    @Test
+    fun `a value class body is rejected`() {
+        val e = assertFailsWith<IllegalStateException> {
+            serializer<ValueClassBody>().descriptor.validateBindingShape()
+        }
+        assertTrue(e.message!!.contains("token"))
+        assertTrue(e.message!!.contains("structural"))
     }
 
     @Test
