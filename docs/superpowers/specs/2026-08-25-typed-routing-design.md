@@ -698,6 +698,15 @@ val doc = OpenApiDoc(info = ...) + application.plugin(RoutingRoot).descendants()
 
 `descendants()` は `Route` が継承する `io.ktor.util.collections.TreeLike` のメンバである。
 
+`OpenApiDocSource.Routing` はルートツリー全体を列挙するため、`describe` していない
+素の Ktor ルートも空の Operation（`"/health":{"get":{}}`）として文書に現れる。
+ブリッジが `EndpointSpec` の無いルートを読み飛ばすとは「文書に出さない」ではなく
+「何のメタデータも足さない」の意。文書から消したいルートには公式の `Route.hide()` を使う。
+
+`EndpointSpec.responseType` が `null`（`Res = Unit`）でも成功レスポンス自体は必ず宣言する。
+OAS 3.1 は Responses Object に最低 1 件を要求するため、スキーマだけを条件付きにする。
+出力は `"responses":{"204":{"description":""}}` になる。
+
 Gradle のコンパイラプラグインによるコード推論は本 DSL では空振りするため、
 `codeInferenceEnabled = false` とし、実行時注釈に一本化することを推奨する。
 実行時注釈が最優先されるため、有効なままでも本設計の定義が勝つ。
