@@ -427,6 +427,7 @@ package jp.kukv.typedrouting
 
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.statement.bodyAsText
 import io.ktor.http.parametersOf
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.routing
@@ -472,8 +473,6 @@ class ParameterSourceTest {
     }
 }
 ```
-
-`bodyAsText` の import は `io.ktor.client.statement.bodyAsText`。
 
 - [ ] **Step 2: テストを実行して失敗することを確認する**
 
@@ -1678,6 +1677,7 @@ git commit -m "feat: EndpointSpec と起動時のバインド形状検証を追�
 package jp.kukv.typedrouting
 
 import io.ktor.client.request.get
+import io.ktor.client.statement.bodyAsText
 import io.ktor.server.application.install
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
@@ -1725,8 +1725,6 @@ class TypedRoutingPluginTest {
     }
 }
 ```
-
-`bodyAsText` の import は `io.ktor.client.statement.bodyAsText`。
 
 - [ ] **Step 2: テストを実行して失敗することを確認する**
 
@@ -1864,13 +1862,12 @@ git commit -m "feat: TypedRouting プラグインと Around インターセプ�
 ```kotlin
 package jp.kukv.typedrouting
 
-import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
 class ValidationTest {
     @Test
-    fun `rejections accumulate into one exception`() = runTest {
+    fun `rejections accumulate into one exception`() {
         val scope = ValidationScope()
         scope.reject("page", "must be >= 1")
         scope.reject("limit", "must be 1..100")
@@ -1880,17 +1877,12 @@ class ValidationTest {
     }
 
     @Test
-    fun `no rejection means no violations`() = runTest {
+    fun `no rejection means no violations`() {
         val scope = ValidationScope()
         assertEquals(0, scope.violations.size)
     }
 }
 ```
-
-`runTest` を使うため `core/build.gradle.kts` の `testImplementation` に
-`org.jetbrains.kotlinx:kotlinx-coroutines-test` を追加し、`libs.versions.toml` にも
-`kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version = "1.11.0" }`
-を追加する。
 
 - [ ] **Step 2: テストを実行して失敗することを確認する**
 
@@ -2000,8 +1992,7 @@ Expected: PASS
 ```bash
 git add core/src/main/kotlin/jp/kukv/typedrouting/Validation.kt \
         core/src/main/kotlin/jp/kukv/typedrouting/EndpointBuilder.kt \
-        core/src/test/kotlin/jp/kukv/typedrouting/ValidationTest.kt \
-        gradle/libs.versions.toml core/build.gradle.kts
+        core/src/test/kotlin/jp/kukv/typedrouting/ValidationTest.kt
 git commit -m "feat: ValidationScope と EndpointBuilder を追加"
 ```
 
@@ -2174,15 +2165,18 @@ Expected: コンパイルエラー（型付きの `get` が未解決）
 ```kotlin
 package jp.kukv.typedrouting
 
+import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.HttpMethodRouteSelector
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.RoutingCall
 import io.ktor.server.routing.application
 import io.ktor.server.routing.createRouteFromPath
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.serializer
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
@@ -2253,7 +2247,7 @@ private suspend fun <Res> respondResult(
     call: RoutingCall,
     status: HttpStatusCode,
     responseSerializer: KSerializer<Res>?,
-    json: kotlinx.serialization.json.Json,
+    json: Json,
     body: Any?,
 ) {
     if (responseSerializer == null) {
@@ -2262,7 +2256,7 @@ private suspend fun <Res> respondResult(
     }
     @Suppress("UNCHECKED_CAST")
     val text = json.encodeToString(responseSerializer, body as Res)
-    call.respond(status, io.ktor.http.content.TextContent(text, io.ktor.http.ContentType.Application.Json, status))
+    call.respondText(text, ContentType.Application.Json, status)
 }
 
 @PublishedApi
@@ -2387,9 +2381,9 @@ public inline fun <reified Req, reified Res> Route.route(
 )
 ```
 
-レスポンスの書き出しに `TextContent` を使うのは、ContentNegotiation が
-入っていなくても JSON を返せるようにするためである。バインド側が
-ContentNegotiation を経由しない（spec 6.6）のと対称になる。
+レスポンスを `respondText` で書き出すのは、ContentNegotiation が入っていなくても
+JSON を返せるようにするためである。バインド側が ContentNegotiation を経由しない
+（spec 6.6）のと対称になる。
 
 - [ ] **Step 4: テストを実行して通ることを確認する**
 
