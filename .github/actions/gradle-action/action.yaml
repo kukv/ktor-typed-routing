@@ -1,0 +1,29 @@
+name: Gradle Action
+description: Sets up Java and Gradle, then runs a Gradle command
+
+inputs:
+  command:
+    description: Gradle command to execute
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Java
+      uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+      with:
+        distribution: corretto
+        java-version: 21
+
+    - name: Set up Gradle
+      uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+
+    - name: Run Gradle command
+      shell: bash
+      env:
+        GRADLE_COMMAND: ${{ inputs.command }}
+      run: |
+        chmod +x ./gradlew
+        # 複数タスクを空白区切りで受け取るため意図的にクォートしない
+        # shellcheck disable=SC2086
+        ./gradlew $GRADLE_COMMAND

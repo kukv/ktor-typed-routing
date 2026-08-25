@@ -258,3 +258,13 @@ Ktor の Gradle プラグインによるコード推論（route ハンドラの�
 - **`@Body` は構造型でなければならない。** `@Body val text: String` のようなスカラー（プリミティブ / String / enum / `@JvmInline value class`）のボディは起動時に例外になる。`@Serializable` なクラスで包むこと。
 - **`@Body` は 1 リクエストにつき 1 つまで。** 2 つ以上付けると起動時に例外になる。
 - **プリミティブの型変換失敗はすべて集めて報告するが、カスタム serializer が投げた例外は最初の 1 件で打ち切る。** kotlinx.serialization の `Decoder` の性質上、カスタム serializer 内の例外はそこで即座に伝播するため、他のフィールドの検証を続けられない。
+
+## 開発
+
+CI は GitHub Actions で動く。PR とマージで `./gradlew check`、加えて OSV-Scanner による依存脆弱性スキャン（SCA）を PR / main への push / 週次で実行する。
+
+SCA が読む `gradle.lockfile` を用意するため Gradle の依存ロックを有効にしている。`gradle/libs.versions.toml` のバージョンを変更したら、次のコマンドでロックファイルを再生成してコミットすること。忘れるとビルドがロック不整合で落ちる。
+
+```bash
+./gradlew resolveAndLockAll --write-locks
+```
