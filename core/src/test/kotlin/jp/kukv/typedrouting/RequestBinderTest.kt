@@ -73,4 +73,25 @@ class RequestBinderTest {
 
         assertEquals(listOf("b"), e.violations.map { it.path })
     }
+
+    @Test
+    fun `conversion failures and missing fields are reported together`() {
+        val query = mapOf("b" to listOf("nope"))
+        val ctx = BindingContext(
+            sources = RequestSources(
+                ParameterSource.Empty,
+                ParameterSource { query[it] },
+                ParameterSource.Empty,
+                ParameterSource.Empty,
+            ),
+            bodyText = null,
+            format = Json,
+        )
+
+        val e = assertFailsWith<RequestBindingException> {
+            ctx.decodeOrThrow(serializer<Required>())
+        }
+
+        assertEquals(setOf("a", "b"), e.violations.map { it.path }.toSet())
+    }
 }
