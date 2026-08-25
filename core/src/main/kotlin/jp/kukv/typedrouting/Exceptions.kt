@@ -1,11 +1,14 @@
 package jp.kukv.typedrouting
 
+import kotlinx.serialization.Serializable
+
 /**
  * 入力の 1 件の違反。
  *
  * @param path 違反したパラメータの名前
  * @param message 人間向けの説明
  */
+@Serializable
 public data class Violation(
     public val path: String,
     public val message: String,

@@ -160,14 +160,15 @@ validate { req ->
 **このライブラリはステータスコードもエラーボディも一切決めない。** バインド失敗は `RequestBindingException`、検証失敗は `ValidationException` として送出するだけで、どちらもステータスコードを持たない。`core/src/main` にある `try`/`catch` は 1 箇所だけで、kotlinx の `MissingFieldException` を violation に変換するためのものであり、何かを揉み消しているわけではない。エラー処理は丸ごと `StatusPages` に委ねる。
 
 ```kotlin
+@Serializable
+data class ErrorBody(val message: String, val violations: List<Violation> = emptyList())
+
 install(StatusPages) {
     exception<RequestBindingException> { call, cause ->
-        val violations = cause.violations.map { "${it.path}: ${it.message}" }
-        call.respond(HttpStatusCode.BadRequest, ErrorBody("invalid request", violations))
+        call.respond(HttpStatusCode.BadRequest, ErrorBody("invalid request", cause.violations))
     }
     exception<ValidationException> { call, cause ->
-        val violations = cause.violations.map { "${it.path}: ${it.message}" }
-        call.respond(HttpStatusCode.UnprocessableEntity, ErrorBody("validation failed", violations))
+        call.respond(HttpStatusCode.UnprocessableEntity, ErrorBody("validation failed", cause.violations))
     }
     exception<Throwable> { call, _ ->
         call.respond(HttpStatusCode.InternalServerError, ErrorBody("internal error"))
@@ -175,7 +176,7 @@ install(StatusPages) {
 }
 ```
 
-`ErrorBody` は**利用者が定義する型**であり、本ライブラリはエラーボディの形式を提供しない。`RequestBindingException.violations` / `ValidationException.violations` は `List<Violation>`（`path` と `message` を持つ）だが、`Violation` 自体は `@Serializable` ではないため、`ErrorBody` に持たせたいなら自分のシリアライズ可能な形（上の例では `"path: message"` の文字列）に変換する。
+`ErrorBody` は**利用者が定義する型**であり、本ライブラリはエラーボディの形式を提供しない。`RequestBindingException.violations` / `ValidationException.violations` は `List<Violation>`（`path` と `message` を持つ `@Serializable` な型）なので、上のようにそのまま持たせられる。
 
 また、`call.respond(status, ErrorBody(...))` が JSON を書き出すには `install(ContentNegotiation) { json() }` が要る。型付きエンドポイント自身のレスポンスはこれを経由しない（後述）が、これは `StatusPages` 側の通常の `call.respond` であり、通常の Ktor の挙動がそのまま適用される。
 

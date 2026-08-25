@@ -207,10 +207,8 @@ class ReadmeExampleTest {
 
     // --- 6. エラー処理 ---------------------------------------------------
 
-    // Violation は @Serializable ではないため、ErrorBody にそのまま持たせることはできない。
-    // 利用者側で自分のシリアライズ可能な形（ここでは "path: message" の文字列）に変換する。
     @Serializable
-    data class ErrorBody(val message: String, val violations: List<String> = emptyList())
+    data class ErrorBody(val message: String, val violations: List<Violation> = emptyList())
 
     private class UserNotFound : Exception("user not found")
 
@@ -224,12 +222,10 @@ class ReadmeExampleTest {
             install(ContentNegotiation) { json() }
             install(StatusPages) {
                 exception<RequestBindingException> { call, cause ->
-                    val violations = cause.violations.map { "${it.path}: ${it.message}" }
-                    call.respond(HttpStatusCode.BadRequest, ErrorBody("invalid request", violations))
+                    call.respond(HttpStatusCode.BadRequest, ErrorBody("invalid request", cause.violations))
                 }
                 exception<ValidationException> { call, cause ->
-                    val violations = cause.violations.map { "${it.path}: ${it.message}" }
-                    call.respond(HttpStatusCode.UnprocessableEntity, ErrorBody("validation failed", violations))
+                    call.respond(HttpStatusCode.UnprocessableEntity, ErrorBody("validation failed", cause.violations))
                 }
                 exception<UserNotFound> { call, _ ->
                     call.respond(HttpStatusCode.NotFound, ErrorBody("not found"))
@@ -244,6 +240,14 @@ class ReadmeExampleTest {
                 }
             }
         }
+
+        // 違反の構造（path / message）がそのまま利用者のエラーボディに届くことを確認する。
+        val bindingFailure = client.get("/users?limit=20")
+        assertEquals(HttpStatusCode.BadRequest, bindingFailure.status)
+        assertEquals(
+            """{"message":"invalid request","violations":[{"path":"q","message":"is required"}]}""",
+            bindingFailure.bodyAsText(),
+        )
 
         val response = client.get("/users?q=x&page=1&limit=20")
         assertEquals(HttpStatusCode.NotFound, response.status)
