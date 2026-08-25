@@ -654,6 +654,14 @@ Gradle のコンパイラプラグインによるコード推論は本 DSL で�
 
 - `authenticate {}`（auth）
 - route スコープの `install(ContentNegotiation)` / `install(CORS)`
+
+  ただし **型付きエンドポイント自身は ContentNegotiation を経由しない。** 6.6 のとおり
+  レスポンスは `respondText` で直接書き出すため、ContentNegotiation が無くても動く。
+  ここで言う「使える」は次の 2 つを意味する。
+
+  1. 型付きエンドポイントを含むルートに route スコープで install しても起動時に落ちず、
+     型付きエンドポイントが正常に動く（Ktor 内部の `is RoutingNode` 判定を通る）
+  2. 同じルート配下の**標準エンドポイント**は、その ContentNegotiation を通常どおり使える
 - `Route.rateLimit {}`
 - `webSocket()` / `sse()`（標準 DSL のまま併用）
 - `get<Resource>()`（Resources。標準 DSL のまま併用）
