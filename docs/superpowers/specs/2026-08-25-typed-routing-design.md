@@ -332,6 +332,13 @@ data class SearchUsersReq(
 - **ネストは許可する。** グループの中の構造型も再帰的にグループとして扱う。
 - **グループの中に `@Body` は書けない。** グループは単一の入力ソース内で閉じる。
   違反は起動時に例外とする。
+- **`@Body` はスカラー型（`PrimitiveKind` / `ENUM`）に付けられない。** 構造型でなければならない。
+  違反は起動時に例外とする。
+
+  理由は実装上の制約である。kotlinx はスカラー要素に対して `decodeStringElement` などを呼び、
+  `AbstractDecoder` のそれらは `final` で素の `decodeXxx()` に委譲する。そのため
+  `decodeSerializableElement` に到達せず、ボディを読む経路に入れない。
+  チェックが無いと直前の要素の値が静かに入る。
 - **名前衝突は起動時に検出して例外とする。** 2 つのグループが同名のパラメータを
   持つ場合、`EndpointSpec` の構築時にチェックする。
 
@@ -389,6 +396,11 @@ ContentNegotiation は経由しない。初版は JSON 専用とする。
 欠落（必須のもの）・型変換失敗は `RequestBindingException(violations)` として送出する。
 複数フィールドの失敗は 1 つの例外にまとめて報告する。**ステータスコードは決めない。**
 StatusPages 側で `400 Bad Request` などに割り当てる（9.3 参照）。
+
+**ただしボディの JSON 構文エラーは対象外である。** `decodeFromString` が投げる
+`SerializationException`（欠落フィールドを除く）は捕まえずに素通しする。
+本ライブラリが例外を捕まえないという原則（11 章）を優先するためで、
+利用者は StatusPages に `exception<SerializationException>` を足す必要がある。
 
 ## 7. バリデーション
 
@@ -666,6 +678,11 @@ io.ktor.openapi.JsonSchemaInference
 `kotlin-reflect` を使うのは `:openapi` だけである。`:core` は
 `SerialDescriptor` だけで完結し、reflection を使わない。両者は同じ入力に対して
 同じパラメータ名とグループ展開を返さなければならず、テストで突き合わせる。
+
+**パラメータ名は両モジュールとも `SerialDescriptor.getElementName(index)` を使う。**
+Kotlin のプロパティ名を使ってはならない。`@SerialName("user_id")` が付いていると
+`:core` は `user_id` をバインドするため、プロパティ名で文書を作ると
+サーバが提供しない API を宣言することになる。
 
 ドキュメントの組み立て・`$ref` 解決・スキーマ命名・YAML/JSON 出力・Swagger UI 配信は
 公式実装に委ねる。
