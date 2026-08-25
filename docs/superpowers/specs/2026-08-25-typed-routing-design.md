@@ -629,10 +629,26 @@ io.ktor.openapi.RequestBody$Builder : JsonSchemaInference
 
 io.ktor.openapi.Responses$Builder
   fun response(code: Int, block: Response.Builder.() -> Unit)
+  operator fun invoke(status: HttpStatusCode, block: Response.Builder.() -> Unit)
+  fun default(block: Response.Builder.() -> Unit)
+
+io.ktor.openapi.Response$Builder : JsonSchemaInference
+  var description: String?;  var schema: JsonSchema?
+  fun content(block: MediaType.Builder.() -> Unit)
+  operator fun invoke(contentType: ContentType, block: MediaType.Builder.() -> Unit)
+  fun headers(block: Headers.Builder.() -> Unit);  fun link(name, block)
+
+io.ktor.openapi.MediaType$Builder : JsonSchemaInference
+  var schema: JsonSchema?
+  fun example(name: String, example: ExampleObject);  fun encoding(name, encoding)
 
 io.ktor.openapi.JsonSchemaInference
   fun buildSchema(type: KType): JsonSchema
 ```
+
+`Response.Builder` にも `RequestBody.Builder` にも `schema` プロパティが直接あり、
+これを設定すると `describe` 側が既定のコンテントタイプ（`application/json`）の
+`MediaType` に展開する。`content { }` を経由する必要はない。
 
 ### 12.2 `:openapi` が `KType` を入力にする理由
 
@@ -651,13 +667,33 @@ io.ktor.openapi.JsonSchemaInference
 ドキュメントの組み立て・`$ref` 解決・スキーマ命名・YAML/JSON 出力・Swagger UI 配信は
 公式実装に委ねる。
 
-利用者は公式の手順どおりに設定する。
+### 12.3 ドキュメントの取り出しと注意点
+
+`ktor-server-routing-openapi` 3.5.2 には `Route.openAPI(path)` のような
+ドキュメント配信ルートは含まれない（パッケージ `io.ktor.server.routing.openapi` の
+公開 API は `describe` / `hide` / `mapToPathItems` / `OpenApiDocSource` / `OpenApiDoc.plus` のみ）。
+ドキュメントの生成は次のいずれかで行う。
 
 ```kotlin
-routing {
-    openAPI("docs")     // または swaggerUI(...)
-}
+// ルートツリーからドキュメントを組み立ててシリアライズする
+val text = OpenApiDocSource.Routing()
+    .read(application, OpenApiDoc(info = OpenApiInfo(title = "...", version = "...")))
+    .content
+
+// あるいはドキュメントモデルだけを組み立てる
+val doc = OpenApiDoc(info = ...) + application.plugin(RoutingRoot).descendants()
 ```
+
+配信ルート（Swagger UI など）が要るなら、別途 `ktor-server-swagger` /
+`ktor-server-openapi` を利用者側で足す。
+
+ルートツリーの根は `application.plugin(RoutingRoot)` で取る。
+`Application.routingRoot` も 3.5.2 の `ktor-server-core` に存在し
+（`RoutingIntrospectionKt.getRoutingRoot(Application)` を javap で確認）、
+実装は `pluginOrNull(RoutingRoot) ?: throw IllegalStateException(...)` なので
+両者は等価である。違いは未 install 時の例外型だけ。
+
+`descendants()` は `Route` が継承する `io.ktor.util.collections.TreeLike` のメンバである。
 
 Gradle のコンパイラプラグインによるコード推論は本 DSL では空振りするため、
 `codeInferenceEnabled = false` とし、実行時注釈に一本化することを推奨する。
