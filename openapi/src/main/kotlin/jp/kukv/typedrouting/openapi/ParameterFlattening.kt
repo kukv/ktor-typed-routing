@@ -81,7 +81,7 @@ private fun KType.isGroupType(): Boolean {
 internal fun KType.flattenParameters(): List<FlatParameter> {
     val result = mutableListOf<FlatParameter>()
 
-    fun walk(type: KType, prefix: String, inherited: ParameterIn?) {
+    fun walk(type: KType, prefix: String, inherited: ParameterIn?, ancestorOptional: Boolean) {
         val classifier = type.classifier as? KClass<*> ?: return
 
         for ((property, parameter) in classifier.orderedProperties()) {
@@ -92,23 +92,25 @@ internal fun KType.flattenParameters(): List<FlatParameter> {
             val elementName = origin?.name ?: property.name
             val elementPrefix = origin?.prefix.orEmpty()
             val elementType = property.returnType
+            val optional = ancestorOptional || parameter?.isOptional == true || elementType.isMarkedNullable
 
             if (elementType.isGroupType()) {
-                walk(elementType, prefix + elementPrefix, location)
+                // グループ自体が任意（既定値あり）または nullable なら、
+                // `:core` はグループごと省略を許すので子孫はすべて任意になる。
+                walk(elementType, prefix + elementPrefix, location, optional)
                 continue
             }
 
-            val hasDefault = parameter?.isOptional == true
             result += FlatParameter(
                 name = prefix + elementName,
                 location = location,
-                required = !hasDefault && !elementType.isMarkedNullable,
+                required = !optional,
                 type = elementType,
             )
         }
     }
 
-    walk(this, prefix = "", inherited = null)
+    walk(this, prefix = "", inherited = null, ancestorOptional = false)
     return result
 }
 
