@@ -153,7 +153,7 @@ install(TypedRouting) {
 
 ### 5.2 エンドポイントの定義
 
-エンドポイントは常に builder を持つ。`summary` / `description` / `status` / `errors` /
+エンドポイントは常に builder を持つ。`summary` / `description` / `status` / `error` /
 `validate` / `around` / `handle` のすべてが builder の中に集まる。**書き方は 1 つしかない。**
 
 グルーピングは標準の `route {}` に任せ、リーフにあたるメソッド別の関数
@@ -173,7 +173,7 @@ routing {
                 summary = "Create a user"
                 description = "Creates a user in the given organization."
                 status = Created
-                errors(Conflict to ErrorBody::class)
+                error<ErrorBody>(Conflict)
                 validate { if (it.user.name.isBlank()) reject("name", "must not be blank") }
                 around(MaskSensitiveFields)
                 handle { req -> userService.create(req.orgId, req.user) }
@@ -246,8 +246,8 @@ createChild(HttpMethodRouteSelector(method))          // 条件 3 を満たす
 ```kotlin
 @SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Path(val name: String = "")
 @SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Query(val name: String = "", val prefix: String = "")
-@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Header(val name: String = "")
-@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Cookie(val name: String = "")
+@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Header(val name: String = "", val prefix: String = "")
+@SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Cookie(val name: String = "", val prefix: String = "")
 @SerialInfo @Target(AnnotationTarget.PROPERTY) annotation class Body
 ```
 
@@ -282,13 +282,21 @@ Req が `Unit` の場合、`handle` のラムダは引数を取らない。
 |---|---|---|
 | `Int`, `String`, `ULong` | `PrimitiveKind` | スカラー |
 | `UserStatus`（enum） | `SerialKind.ENUM` | スカラー |
-| `UserId`（value class） | inline → `PrimitiveKind` | スカラー |
+| `UserId`（value class） | `StructureKind.CLASS` + `isInline` | スカラー |
 | `LocalDate`（カスタム serializer） | `PrimitiveKind.STRING` | スカラー |
 | `List<String>` | `StructureKind.LIST` | 複数値スカラー（`?tags=a&tags=b`） |
-| `Paging`（data class） | `StructureKind.CLASS` / `OBJECT` | グループ（再帰） |
+| `Paging`（data class） | `CLASS` / `OBJECT`（`isInline` でない） | グループ（再帰） |
 
-この規則により、value class / enum / カスタム serializer / コレクションが
-特別扱いなしに動作する。
+この規則により、enum / カスタム serializer / コレクションが特別扱いなしに動作する。
+
+**value class だけは明示が要る。** `@JvmInline value class` の descriptor は
+`kind = StructureKind.CLASS` かつ `isInline = true` である。`isInline` を見ないと
+value class がグループとして再帰され、内側のプロパティ名（`raw` など）を
+パラメータとして探しに行ってしまう。グループ判定は
+**「`CLASS` または `OBJECT` かつ `isInline` でない」** とする。
+
+この規則は `:core`（`SerialDescriptor` 経由）と `:openapi`（`KType` から
+`serializer(kType).descriptor` を得て判定）の両方で同一でなければならない。
 
 ### 6.5 グルーピング
 
@@ -324,6 +332,13 @@ data class SearchUsersReq(
 - **ネストは許可する。** グループの中の構造型も再帰的にグループとして扱う。
 - **グループの中に `@Body` は書けない。** グループは単一の入力ソース内で閉じる。
   違反は起動時に例外とする。
+- **`@Body` はスカラー型（`PrimitiveKind` / `ENUM`）に付けられない。** 構造型でなければならない。
+  違反は起動時に例外とする。
+
+  理由は実装上の制約である。kotlinx はスカラー要素に対して `decodeStringElement` などを呼び、
+  `AbstractDecoder` のそれらは `final` で素の `decodeXxx()` に委譲する。そのため
+  `decodeSerializableElement` に到達せず、ボディを読む経路に入れない。
+  チェックが無いと直前の要素の値が静かに入る。
 - **名前衝突は起動時に検出して例外とする。** 2 つのグループが同名のパラメータを
   持つ場合、`EndpointSpec` の構築時にチェックする。
 
@@ -361,11 +376,31 @@ ContentNegotiation は経由しない。初版は JSON 専用とする。
 この逸脱が適用されるのは `@Path` / `@Query` / `@Header` / `@Cookie` に限る。
 `@Body` の中身は通常の kotlinx.serialization の規則に従う。
 
+### 6.7.1 グループに対する適用
+
+グループ（構造型の要素）にも同じ規則を適用する。子要素の値が 1 つでもあるかどうかで
+「値が来た」を判定する。
+
+| 宣言 | 子の値が 1 つ以上ある | 子の値が 1 つも無い |
+|---|---|---|
+| `@Query val paging: Paging` | 展開する | 子それぞれの既定値で埋める |
+| `@Query val paging: Paging = Paging(1, 20)` | 展開する | グループごと既定値を使う |
+| `@Query val paging: Paging?` | 展開する | **`null`** |
+
+**グループ自体が任意（既定値あり）または nullable の場合、その子孫はすべて任意である。**
+サーバが省略を受け付けるため、OpenAPI も子を required と宣言してはならない。
+`:openapi` の平坦化はこの継承を実装しなければならない。
+
 ### 6.8 バインド失敗
 
 欠落（必須のもの）・型変換失敗は `RequestBindingException(violations)` として送出する。
 複数フィールドの失敗は 1 つの例外にまとめて報告する。**ステータスコードは決めない。**
 StatusPages 側で `400 Bad Request` などに割り当てる（9.3 参照）。
+
+**ただしボディの JSON 構文エラーは対象外である。** `decodeFromString` が投げる
+`SerializationException`（欠落フィールドを除く）は捕まえずに素通しする。
+本ライブラリが例外を捕まえないという原則（11 章）を優先するためで、
+利用者は StatusPages に `exception<SerializationException>` を足す必要がある。
 
 ## 7. バリデーション
 
@@ -494,12 +529,12 @@ install(StatusPages) {
 
 ### 9.5 OpenAPI との関係
 
-builder の `errors(...)` は **OpenAPI のドキュメント宣言としてのみ**存在する。
+builder の `error<T>(status)` は **OpenAPI のドキュメント宣言としてのみ**存在する。
 実行時のマッピングとは完全に独立しているため、役割が明確になる。
 
 ```kotlin
 post<CreateUserReq, User> {
-    errors(Conflict to ErrorBody::class)   // ドキュメントに出るだけ
+    error<ErrorBody>(Conflict)   // ドキュメントに出るだけ
     handle { req -> userService.create(req.orgId, req.user) }
 }
 ```
@@ -582,18 +617,112 @@ RoutingHandler
   OpenAPI の `parameters` に展開する。グループは接頭辞の規則に従って平坦化する。
 - `@Body` の要素と Res 型は `requestBody` / `responses` のスキーマにする。
   スキーマ推論は公式の `KotlinxSerializerJsonSchemaInference` を使う。
-- builder の `summary` / `description` / `status` / `errors` を対応する項目に反映する。
+- **成功レスポンスは `Res = Unit`（スキーマなし）でも必ず 1 件出す。**
+  OAS 3.1 は Responses Object に最低 1 つの応答コードを要求するため、
+  `204 No Content` のエンドポイントで `responses` が空になってはならない。
+- builder の `summary` / `description` / `status` / `error` を対応する項目に反映する。
+
+### 12.1 確認済みの公式 API（Ktor 3.5.2）
+
+`javap` で確認した形。`Operation.Builder` は入れ子のビルダになっている。
+
+```
+io.ktor.openapi.Operation$Builder : JsonSchemaInference
+  var summary: String?;  var description: String?
+  fun parameters(block: Parameters.Builder.() -> Unit)
+  fun requestBody(block: RequestBody.Builder.() -> Unit)
+  fun responses(block: Responses.Builder.() -> Unit)
+
+io.ktor.openapi.Parameters$Builder
+  fun path / query / header / cookie (name: String, block: Parameter.Builder.() -> Unit)
+
+io.ktor.openapi.Parameter$Builder : JsonSchemaInference
+  var required: Boolean;  var description: String?;  var schema: JsonSchema?
+
+io.ktor.openapi.RequestBody$Builder : JsonSchemaInference
+  var required: Boolean;  var schema: JsonSchema?
+
+io.ktor.openapi.Responses$Builder
+  fun response(code: Int, block: Response.Builder.() -> Unit)
+  operator fun invoke(status: HttpStatusCode, block: Response.Builder.() -> Unit)
+  fun default(block: Response.Builder.() -> Unit)
+
+io.ktor.openapi.Response$Builder : JsonSchemaInference
+  var description: String?;  var schema: JsonSchema?
+  fun content(block: MediaType.Builder.() -> Unit)
+  operator fun invoke(contentType: ContentType, block: MediaType.Builder.() -> Unit)
+  fun headers(block: Headers.Builder.() -> Unit);  fun link(name, block)
+
+io.ktor.openapi.MediaType$Builder : JsonSchemaInference
+  var schema: JsonSchema?
+  fun example(name: String, example: ExampleObject);  fun encoding(name, encoding)
+
+io.ktor.openapi.JsonSchemaInference
+  fun buildSchema(type: KType): JsonSchema
+```
+
+`Response.Builder` にも `RequestBody.Builder` にも `schema` プロパティが直接あり、
+これを設定すると `describe` 側が既定のコンテントタイプ（`application/json`）の
+`MediaType` に展開する。`content { }` を経由する必要はない。
+
+### 12.2 `:openapi` が `KType` を入力にする理由
+
+**スキーマ推論の公開入口は `buildSchema(KType)` だけである。**
+`KotlinxSerializerJsonSchemaInference.buildSchemaFromDescriptor` も存在するが
+`internal` で外から呼べない。
+
+したがって `:openapi` は `SerialDescriptor` ではなく `KType` を入力とし、
+アノテーションの読み取り・グループの平坦化・必須判定も `kotlin-reflect` で行う。
+`EndpointSpec` は Req / Res の `KType` を保持する。
+
+`kotlin-reflect` を使うのは `:openapi` だけである。`:core` は
+`SerialDescriptor` だけで完結し、reflection を使わない。両者は同じ入力に対して
+同じパラメータ名とグループ展開を返さなければならず、テストで突き合わせる。
+
+**パラメータ名は両モジュールとも `SerialDescriptor.getElementName(index)` を使う。**
+Kotlin のプロパティ名を使ってはならない。`@SerialName("user_id")` が付いていると
+`:core` は `user_id` をバインドするため、プロパティ名で文書を作ると
+サーバが提供しない API を宣言することになる。
 
 ドキュメントの組み立て・`$ref` 解決・スキーマ命名・YAML/JSON 出力・Swagger UI 配信は
 公式実装に委ねる。
 
-利用者は公式の手順どおりに設定する。
+### 12.3 ドキュメントの取り出しと注意点
+
+`ktor-server-routing-openapi` 3.5.2 には `Route.openAPI(path)` のような
+ドキュメント配信ルートは含まれない（パッケージ `io.ktor.server.routing.openapi` の
+公開 API は `describe` / `hide` / `mapToPathItems` / `OpenApiDocSource` / `OpenApiDoc.plus` のみ）。
+ドキュメントの生成は次のいずれかで行う。
 
 ```kotlin
-routing {
-    openAPI("docs")     // または swaggerUI(...)
-}
+// ルートツリーからドキュメントを組み立ててシリアライズする
+val text = OpenApiDocSource.Routing()
+    .read(application, OpenApiDoc(info = OpenApiInfo(title = "...", version = "...")))
+    .content
+
+// あるいはドキュメントモデルだけを組み立てる
+val doc = OpenApiDoc(info = ...) + application.plugin(RoutingRoot).descendants()
 ```
+
+配信ルート（Swagger UI など）が要るなら、別途 `ktor-server-swagger` /
+`ktor-server-openapi` を利用者側で足す。
+
+ルートツリーの根は `application.plugin(RoutingRoot)` で取る。
+`Application.routingRoot` も 3.5.2 の `ktor-server-core` に存在し
+（`RoutingIntrospectionKt.getRoutingRoot(Application)` を javap で確認）、
+実装は `pluginOrNull(RoutingRoot) ?: throw IllegalStateException(...)` なので
+両者は等価である。違いは未 install 時の例外型だけ。
+
+`descendants()` は `Route` が継承する `io.ktor.util.collections.TreeLike` のメンバである。
+
+`OpenApiDocSource.Routing` はルートツリー全体を列挙するため、`describe` していない
+素の Ktor ルートも空の Operation（`"/health":{"get":{}}`）として文書に現れる。
+ブリッジが `EndpointSpec` の無いルートを読み飛ばすとは「文書に出さない」ではなく
+「何のメタデータも足さない」の意。文書から消したいルートには公式の `Route.hide()` を使う。
+
+`EndpointSpec.responseType` が `null`（`Res = Unit`）でも成功レスポンス自体は必ず宣言する。
+OAS 3.1 は Responses Object に最低 1 件を要求するため、スキーマだけを条件付きにする。
+出力は `"responses":{"204":{"description":""}}` になる。
 
 Gradle のコンパイラプラグインによるコード推論は本 DSL では空振りするため、
 `codeInferenceEnabled = false` とし、実行時注釈に一本化することを推奨する。
@@ -605,6 +734,14 @@ Gradle のコンパイラプラグインによるコード推論は本 DSL で�
 
 - `authenticate {}`（auth）
 - route スコープの `install(ContentNegotiation)` / `install(CORS)`
+
+  ただし **型付きエンドポイント自身は ContentNegotiation を経由しない。** 6.6 のとおり
+  レスポンスは `respondText` で直接書き出すため、ContentNegotiation が無くても動く。
+  ここで言う「使える」は次の 2 つを意味する。
+
+  1. 型付きエンドポイントを含むルートに route スコープで install しても起動時に落ちず、
+     型付きエンドポイントが正常に動く（Ktor 内部の `is RoutingNode` 判定を通る）
+  2. 同じルート配下の**標準エンドポイント**は、その ContentNegotiation を通常どおり使える
 - `Route.rateLimit {}`
 - `webSocket()` / `sse()`（標準 DSL のまま併用）
 - `get<Resource>()`（Resources。標準 DSL のまま併用）
