@@ -170,11 +170,17 @@ install(StatusPages) {
     exception<ValidationException> { call, cause ->
         call.respond(HttpStatusCode.UnprocessableEntity, ErrorBody("validation failed", cause.violations))
     }
+    // ボディの JSON が壊れている場合はここに来る（RequestBindingException にはならない）。
+    exception<SerializationException> { call, _ ->
+        call.respond(HttpStatusCode.BadRequest, ErrorBody("malformed body"))
+    }
     exception<Throwable> { call, _ ->
         call.respond(HttpStatusCode.InternalServerError, ErrorBody("internal error"))
     }
 }
 ```
+
+**リクエストボディの JSON が壊れている場合は `RequestBindingException` にはならない。** 本ライブラリは何も捕捉しないため、`kotlinx.serialization.SerializationException`（`Json.decodeFromString` が投げるもの）がそのまま伝播する。`exception<RequestBindingException>` しか登録していないと `exception<Throwable>` に落ちて 500 になるので、上のように `exception<SerializationException>` を登録して 400 にする。
 
 `ErrorBody` は**利用者が定義する型**であり、本ライブラリはエラーボディの形式を提供しない。`RequestBindingException.violations` / `ValidationException.violations` は `List<Violation>`（`path` と `message` を持つ `@Serializable` な型）なので、上のようにそのまま持たせられる。
 
@@ -248,4 +254,6 @@ Ktor の Gradle プラグインによるコード推論（route ハンドラの�
 - **JVM 専用。** マルチプラットフォーム対応はしていない。
 - **リクエストボディは JSON のみ。** `StringFormat` は差し替え可能だが、初版では JSON 専用。
 - **型付きエンドポイントのレスポンスは `ContentNegotiation` を経由しない。** `respondText` で直接 JSON を書き出すため、`ContentNegotiation` をインストールしていなくても動くし、インストールしても型付きエンドポイントの挙動は変わらない（同じ `routing {}` 配下の素の Ktor エンドポイントには通常どおり効く）。
+- **リクエストボディの不正は `RequestBindingException` ではなく `kotlinx.serialization.SerializationException` として届く。** 壊れた JSON は `Json.decodeFromString` の中で失敗し、本ライブラリはそれを捕捉しない。400 を返したいなら `StatusPages` に `exception<SerializationException>` を登録する（「エラー処理」を参照）。バインド対象の型が受け付けない値（`@Body` に載せた型のフィールドの型違いなど）も同様である。
+- **`@Body` は構造型でなければならない。** `@Body val text: String` のようなスカラー（プリミティブ / String / enum）のボディは起動時に例外になる。`@Serializable` なクラスで包むこと。
 - **プリミティブの型変換失敗はすべて集めて報告するが、カスタム serializer が投げた例外は最初の 1 件で打ち切る。** kotlinx.serialization の `Decoder` の性質上、カスタム serializer 内の例外はそこで即座に伝播するため、他のフィールドの検証を続けられない。

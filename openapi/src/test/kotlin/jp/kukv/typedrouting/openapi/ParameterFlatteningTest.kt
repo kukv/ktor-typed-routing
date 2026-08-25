@@ -5,6 +5,7 @@ import jp.kukv.typedrouting.Cookie
 import jp.kukv.typedrouting.Header
 import jp.kukv.typedrouting.Path
 import jp.kukv.typedrouting.Query
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlin.reflect.typeOf
 import kotlin.test.Test
@@ -62,6 +63,30 @@ class ParameterFlatteningTest {
 
     @Serializable
     data class Outer(@Query(prefix = "o.") val inner: Inner)
+
+    @Serializable
+    data class SerialNamedGroup(
+        @SerialName("from_at") val from: String,
+        val to: String,
+    )
+
+    @Serializable
+    data class SerialNamed(
+        @Path @SerialName("org_id") val orgId: Long,
+        @Query @SerialName("user_id") val userId: String,
+        @Query("explicit") @SerialName("ignored") val overridden: String,
+        @Query(prefix = "w.") val window: SerialNamedGroup,
+    )
+
+    @Test
+    fun `serial names are used for parameter names`() {
+        val flat = typeOf<SerialNamed>().flattenParameters()
+
+        assertEquals(
+            listOf("org_id", "user_id", "explicit", "w.from_at", "w.to"),
+            flat.map { it.name },
+        )
+    }
 
     @Test
     fun `groups are flattened with their prefix in declaration order`() {

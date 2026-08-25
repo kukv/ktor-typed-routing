@@ -135,7 +135,7 @@ internal class ObjectDecoder(
 
         if (descriptor.getElementDescriptor(index).kind == StructureKind.LIST) {
             val values = ctx.sources.sourceFor(origin.kind).getAll(prefix + origin.name).orEmpty()
-            return MultiValueDecoder(values, ctx, origin.name).decodeSerializableValue(deserializer)
+            return MultiValueDecoder(values, ctx, prefix + origin.name).decodeSerializableValue(deserializer)
         }
 
         return super.decodeSerializableElement(descriptor, index, deserializer, previousValue)
@@ -239,11 +239,23 @@ private class MultiValueDecoder(
     override fun decodeLong(): Long =
         current().toLongOrNull() ?: run { violate("must be an integer"); 0L }
 
+    override fun decodeShort(): Short =
+        current().toShortOrNull() ?: run { violate("must be an integer"); 0 }
+
+    override fun decodeByte(): Byte =
+        current().toByteOrNull() ?: run { violate("must be an integer"); 0 }
+
     override fun decodeDouble(): Double =
         current().toDoubleOrNull() ?: run { violate("must be a number"); 0.0 }
 
+    override fun decodeFloat(): Float =
+        current().toFloatOrNull() ?: run { violate("must be a number"); 0f }
+
     override fun decodeBoolean(): Boolean =
         current().toBooleanStrictOrNull() ?: run { violate("must be true or false"); false }
+
+    override fun decodeChar(): Char =
+        current().singleOrNull() ?: run { violate("must be a single character"); ' ' }
 
     override fun decodeEnum(enumDescriptor: SerialDescriptor): Int {
         val text = current()

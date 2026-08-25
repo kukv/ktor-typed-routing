@@ -28,6 +28,18 @@ class EndpointSpecTest {
     )
 
     @Serializable
+    private data class ScalarBody(
+        @Query val page: Int,
+        @Body val text: String,
+    )
+
+    @Serializable
+    private enum class Kind { A, B }
+
+    @Serializable
+    private data class EnumBody(@Body val kind: Kind)
+
+    @Serializable
     private data class Fine(
         @Query val paging: Paging,
         @Query(prefix = "r.") val range: Range,
@@ -47,6 +59,23 @@ class EndpointSpecTest {
             serializer<BodyInGroup>().descriptor.validateBindingShape()
         }
         assertTrue(e.message!!.contains("@Body"))
+    }
+
+    @Test
+    fun `a scalar body is rejected`() {
+        val e = assertFailsWith<IllegalStateException> {
+            serializer<ScalarBody>().descriptor.validateBindingShape()
+        }
+        assertTrue(e.message!!.contains("text"))
+        assertTrue(e.message!!.contains("structural"))
+    }
+
+    @Test
+    fun `an enum body is rejected`() {
+        val e = assertFailsWith<IllegalStateException> {
+            serializer<EnumBody>().descriptor.validateBindingShape()
+        }
+        assertTrue(e.message!!.contains("kind"))
     }
 
     @Test

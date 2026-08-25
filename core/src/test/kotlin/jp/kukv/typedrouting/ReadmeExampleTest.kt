@@ -16,9 +16,12 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.route
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 /**
  * README に載せるサンプルの動作確認。
@@ -252,6 +255,61 @@ class ReadmeExampleTest {
         val response = client.get("/users?q=x&page=1&limit=20")
         assertEquals(HttpStatusCode.NotFound, response.status)
         assertEquals("""{"message":"not found","violations":[]}""", response.bodyAsText())
+    }
+
+    @Serializable
+    data class CreateUserBody(val name: String)
+
+    @Serializable
+    data class CreateUserReq(@Body val body: CreateUserBody)
+
+    @Test
+    fun `error handling - a malformed body surfaces as SerializationException, not RequestBindingException`() =
+        testApplication {
+            application {
+                install(TypedRouting)
+                install(ContentNegotiation) { json() }
+                install(StatusPages) {
+                    exception<RequestBindingException> { call, cause ->
+                        call.respond(HttpStatusCode.BadRequest, ErrorBody("invalid request", cause.violations))
+                    }
+                    exception<SerializationException> { call, _ ->
+                        call.respond(HttpStatusCode.BadRequest, ErrorBody("malformed body"))
+                    }
+                    exception<Throwable> { call, _ ->
+                        call.respond(HttpStatusCode.InternalServerError, ErrorBody("internal error"))
+                    }
+                }
+                routing {
+                    post<CreateUserReq, String>("/users") {
+                        handle { "ok" }
+                    }
+                }
+            }
+
+            val response = client.post("/users") {
+                contentType(ContentType.Application.Json)
+                setBody("{ not json")
+            }
+            assertEquals(HttpStatusCode.BadRequest, response.status)
+            assertEquals("""{"message":"malformed body","violations":[]}""", response.bodyAsText())
+        }
+
+    @Test
+    fun `error handling - the README documents the SerializationException handler`() {
+        val readme = generateSequence(File(".").absoluteFile) { it.parentFile }
+            .map { File(it, "README.md") }
+            .first { it.isFile }
+            .readText()
+
+        assertTrue(
+            readme.contains("exception<SerializationException>"),
+            "README の StatusPages のサンプルに SerializationException のハンドラが必要",
+        )
+        assertTrue(
+            readme.contains("kotlinx.serialization.SerializationException"),
+            "README の制限事項にボディの不正が SerializationException になることの記載が必要",
+        )
     }
 
     // --- 7. around -------------------------------------------------------

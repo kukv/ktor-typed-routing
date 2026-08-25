@@ -7,12 +7,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class AnnotationsTest {
+    // @Body は構造型でなければならない（validateBindingShape が起動時に弾く）。
+    @Serializable
+    private data class Payload(val text: String)
+
     @Serializable
     private data class Sample(
         @Path val orgId: Long,
         @Query("q") val keyword: String?,
         @Header("X-Trace-Id") val traceId: String?,
-        @Body val payload: String,
+        @Body val payload: Payload,
     )
 
     @Test

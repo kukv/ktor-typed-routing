@@ -33,30 +33,63 @@ private data class Origin(
     val isBody: Boolean,
 )
 
-/** プロパティに付いた由来アノテーションを読む。無ければ `null`。 */
-private fun KProperty1<*, *>.originOrNull(): Origin? {
+/**
+ * プロパティに付いた由来アノテーションを読む。無ければ `null`。
+ *
+ * 名前を省略した場合に使うのは [serialName]（`@SerialName` を反映した名前）であって
+ * Kotlin のプロパティ名ではない。`:core` は `SerialDescriptor.getElementName` で
+ * 束縛するため、ここでプロパティ名を使うと 2 つのモジュールで名前が食い違う。
+ */
+private fun KProperty1<*, *>.originOrNull(serialName: String): Origin? {
     annotations.forEach { annotation ->
         when (annotation) {
-            is Path -> return Origin(ParameterIn.PATH, annotation.name.ifEmpty { name }, "", false)
-            is Query -> return Origin(ParameterIn.QUERY, annotation.name.ifEmpty { name }, annotation.prefix, false)
-            is Header -> return Origin(ParameterIn.HEADER, annotation.name.ifEmpty { name }, annotation.prefix, false)
-            is Cookie -> return Origin(ParameterIn.COOKIE, annotation.name.ifEmpty { name }, annotation.prefix, false)
-            is Body -> return Origin(null, name, "", true)
+            is Path -> return Origin(ParameterIn.PATH, annotation.name.ifEmpty { serialName }, "", false)
+            is Query -> return Origin(ParameterIn.QUERY, annotation.name.ifEmpty { serialName }, annotation.prefix, false)
+            is Header -> return Origin(ParameterIn.HEADER, annotation.name.ifEmpty { serialName }, annotation.prefix, false)
+            is Cookie -> return Origin(ParameterIn.COOKIE, annotation.name.ifEmpty { serialName }, annotation.prefix, false)
+            is Body -> return Origin(null, serialName, "", true)
         }
     }
     return null
 }
 
+/** 平坦化の対象となる要素 1 つ。[serialName] は `@SerialName` を反映した名前。 */
+private data class Element(
+    val property: KProperty1<*, *>,
+    val parameter: KParameter?,
+    val serialName: String,
+)
+
 /**
- * 宣言順にプロパティを返す。`memberProperties` は順序が保証されないため、
+ * 宣言順に要素を返す。`memberProperties` は順序が保証されないため、
  * プライマリコンストラクタの引数順に並べ直す。
+ *
+ * `@SerialName` を反映した名前は `SerialDescriptor` 側にしかないため、descriptor の
+ * 要素と添字で対応づける。`@Serializable` なクラスの descriptor の要素順は
+ * プライマリコンストラクタの引数順と一致するのでこれは安全だが、要素数が食い違う場合
+ * （`@Transient` を含む場合など）は対応を保証できないのでプロパティ名に退避する。
  */
-private fun KClass<*>.orderedProperties(): List<Pair<KProperty1<*, *>, KParameter?>> {
-    val properties = memberProperties.associateBy { it.name }
-    val parameters = primaryConstructor?.parameters.orEmpty()
-    if (parameters.isEmpty()) return properties.values.map { it to null }
-    return parameters.mapNotNull { parameter ->
-        properties[parameter.name]?.let { it to parameter }
+private fun KType.orderedElements(): List<Element> {
+    val classifier = classifier as? KClass<*> ?: return emptyList()
+    val properties = classifier.memberProperties.associateBy { it.name }
+    val parameters = classifier.primaryConstructor?.parameters.orEmpty()
+    val ordered: List<Pair<KProperty1<*, *>, KParameter?>> =
+        if (parameters.isEmpty()) {
+            properties.values.map { it to null }
+        } else {
+            parameters.mapNotNull { parameter -> properties[parameter.name]?.let { it to parameter } }
+        }
+
+    val serialNames = runCatching { serializer(this).descriptor }.getOrNull()
+        ?.takeIf { it.elementsCount == ordered.size }
+        ?.let { descriptor -> List(descriptor.elementsCount) { descriptor.getElementName(it) } }
+
+    return ordered.mapIndexed { index, (property, parameter) ->
+        Element(
+            property = property,
+            parameter = parameter,
+            serialName = serialNames?.get(index) ?: property.name,
+        )
     }
 }
 
@@ -82,14 +115,12 @@ internal fun KType.flattenParameters(): List<FlatParameter> {
     val result = mutableListOf<FlatParameter>()
 
     fun walk(type: KType, prefix: String, inherited: ParameterIn?, ancestorOptional: Boolean) {
-        val classifier = type.classifier as? KClass<*> ?: return
-
-        for ((property, parameter) in classifier.orderedProperties()) {
-            val origin = property.originOrNull()
+        for ((property, parameter, serialName) in type.orderedElements()) {
+            val origin = property.originOrNull(serialName)
             if (origin?.isBody == true) continue
 
             val location = origin?.location ?: inherited ?: continue
-            val elementName = origin?.name ?: property.name
+            val elementName = origin?.name ?: serialName
             val elementPrefix = origin?.prefix.orEmpty()
             val elementType = property.returnType
             val optional = ancestorOptional || parameter?.isOptional == true || elementType.isMarkedNullable
@@ -115,10 +146,8 @@ internal fun KType.flattenParameters(): List<FlatParameter> {
 }
 
 /** `@Body` を付けたプロパティの型。無ければ `null`。 */
-internal fun KType.bodyParameterType(): KType? {
-    val classifier = classifier as? KClass<*> ?: return null
-    return classifier.orderedProperties()
-        .firstOrNull { (property, _) -> property.originOrNull()?.isBody == true }
-        ?.first
+internal fun KType.bodyParameterType(): KType? =
+    orderedElements()
+        .firstOrNull { it.property.originOrNull(it.serialName)?.isBody == true }
+        ?.property
         ?.returnType
-}

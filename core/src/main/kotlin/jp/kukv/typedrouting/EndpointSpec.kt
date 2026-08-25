@@ -4,7 +4,9 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.util.AttributeKey
 import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.SerialKind
 import kotlin.reflect.KType
 
 /**
@@ -35,6 +37,7 @@ public val EndpointSpecKey: AttributeKey<EndpointSpec> = AttributeKey("TypedRout
  * バインド対象の形を検証する。違反は起動時に例外にする。
  *
  * - グループの中に `@Body` を書くことはできない
+ * - `@Body` はスカラー（プリミティブ / String / enum）であってはならない
  * - 平坦化した結果、同じソースで同じ名前になる要素があってはならない
  */
 @OptIn(ExperimentalSerializationApi::class)
@@ -50,6 +53,14 @@ internal fun SerialDescriptor.validateBindingShape() {
                 check(inherited == null) {
                     "@Body is not allowed inside a group (at '$path' of '$serialName'). " +
                         "A group must stay within a single input source."
+                }
+                // スカラーの @Body を復号すると kotlinx は decodeStringElement などを呼ぶ。
+                // AbstractDecoder ではそれらが final で decodeString() に委譲されるため、
+                // ボディではなく直前の要素の値を静かに読んでしまう。起動時に弾く。
+                val bodyKind = descriptor.getElementDescriptor(i).kind
+                check(bodyKind !is PrimitiveKind && bodyKind != SerialKind.ENUM) {
+                    "@Body must be a structural type (at '$path' of '$serialName'), but it is $bodyKind. " +
+                        "Wrap the value in a @Serializable class."
                 }
                 continue
             }

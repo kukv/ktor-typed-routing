@@ -17,6 +17,22 @@ class RequestDecoderCollectionTest {
     )
 
     @Serializable
+    private data class AllScalarLists(
+        @Query val scores: List<Float>,
+        @Query val ranks: List<Short>,
+        @Query val flags: List<Byte>,
+        @Query val marks: List<Char>,
+    )
+
+    @Serializable
+    private data class Filters(val ids: List<Int> = emptyList())
+
+    @Serializable
+    private data class WithGroupList(
+        @Query(prefix = "f.") val filters: Filters,
+    )
+
+    @Serializable
     private data class WithBody(
         @Path val orgId: Long,
         @Body val payload: Payload,
@@ -67,5 +83,43 @@ class RequestDecoderCollectionTest {
 
         assertEquals(7L, result.orgId)
         assertEquals(Payload("alice", 30), result.payload)
+    }
+
+    @Test
+    fun `float short byte and char lists are decoded`() {
+        val ctx = context(
+            query = mapOf(
+                "scores" to listOf("1.5", "2.5"),
+                "ranks" to listOf("3"),
+                "flags" to listOf("4"),
+                "marks" to listOf("x"),
+            ),
+        )
+
+        val result = ctx.decode(serializer<AllScalarLists>())
+
+        assertEquals(listOf(1.5f, 2.5f), result.scores)
+        assertEquals(listOf<Short>(3), result.ranks)
+        assertEquals(listOf<Byte>(4), result.flags)
+        assertEquals(listOf('x'), result.marks)
+        assertEquals(emptyList(), ctx.violations)
+    }
+
+    @Test
+    fun `a bad element in a scalar list reports a violation instead of throwing`() {
+        val ctx = context(query = mapOf("scores" to listOf("nope"), "ranks" to emptyList(), "flags" to emptyList(), "marks" to emptyList()))
+
+        ctx.decode(serializer<AllScalarLists>())
+
+        assertEquals(listOf(Violation("scores", "must be a number")), ctx.violations)
+    }
+
+    @Test
+    fun `a list inside a group reports the prefixed path`() {
+        val ctx = context(query = mapOf("f.ids" to listOf("x")))
+
+        ctx.decode(serializer<WithGroupList>())
+
+        assertEquals(listOf(Violation("f.ids", "must be an integer")), ctx.violations)
     }
 }

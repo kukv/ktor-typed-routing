@@ -20,6 +20,10 @@ class ElementOriginTest {
     @Serializable
     private value class UserId(val raw: Long)
 
+    // @Body は構造型でなければならない（validateBindingShape が起動時に弾く）。
+    @Serializable
+    private data class Payload(val text: String)
+
     @Serializable
     private data class Sample(
         @Path val orgId: Long,
@@ -31,7 +35,7 @@ class ElementOriginTest {
         @Path val userId: UserId,
         @Header("X-Trace-Id") val traceId: String?,
         @Cookie val session: String?,
-        @Body val payload: String,
+        @Body val payload: Payload,
     )
 
     @Serializable
