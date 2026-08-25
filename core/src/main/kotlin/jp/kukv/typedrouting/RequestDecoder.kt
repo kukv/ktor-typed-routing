@@ -4,6 +4,7 @@ import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.StringFormat
 import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.encoding.AbstractDecoder
 import kotlinx.serialization.encoding.CompositeDecoder
 import kotlinx.serialization.modules.SerializersModule
@@ -100,6 +101,32 @@ internal class ObjectDecoder(
 
     override fun decodeNull(): Nothing? = null
 
+    override fun <T> decodeSerializableElement(
+        descriptor: SerialDescriptor,
+        index: Int,
+        deserializer: DeserializationStrategy<T>,
+        previousValue: T?,
+    ): T {
+        val origin = originAt(index)
+
+        if (origin.kind == SourceKind.BODY) {
+            val text = ctx.bodyText
+            if (text.isNullOrEmpty()) {
+                ctx.violations += Violation(origin.name, "request body is required")
+                @Suppress("UNCHECKED_CAST")
+                return null as T
+            }
+            return ctx.format.decodeFromString(deserializer, text)
+        }
+
+        if (descriptor.getElementDescriptor(index).kind == StructureKind.LIST) {
+            val values = ctx.sources.sourceFor(origin.kind).getAll(prefix + origin.name).orEmpty()
+            return MultiValueDecoder(values, ctx, origin.name).decodeSerializableValue(deserializer)
+        }
+
+        return super.decodeSerializableElement(descriptor, index, deserializer, previousValue)
+    }
+
     override fun beginStructure(descriptor: SerialDescriptor): CompositeDecoder {
         // kotlinx は各構造体に入る際、まだ 1 要素も選ばれていない状態で beginStructure を
         // 呼ぶ（ルートの場合は decode() が構築した直後、グループの場合は decodeElementIndex
@@ -152,6 +179,64 @@ internal class ObjectDecoder(
 
         val allowed = (0 until enumDescriptor.elementsCount).joinToString { enumDescriptor.getElementName(it) }
         violate("must be one of: $allowed")
+        return 0
+    }
+}
+
+/** 同名で複数回現れたパラメータをコレクションとして復号する。 */
+@OptIn(ExperimentalSerializationApi::class)
+private class MultiValueDecoder(
+    private val values: List<String>,
+    private val ctx: BindingContext,
+    private val name: String,
+) : AbstractDecoder() {
+
+    override val serializersModule: SerializersModule get() = ctx.format.serializersModule
+
+    private var position = -1
+
+    override fun decodeCollectionSize(descriptor: SerialDescriptor): Int = values.size
+
+    // 元の草案は true にしていたが、kotlinx 1.11.0 の AbstractDecoder では
+    // decodeXxxElement(descriptor, index) が final で、渡された index を無視して
+    // 単に decodeXxx() に委譲するだけになっている。decodeSequentially() が true だと
+    // kotlinx はコレクション読み取り時に decodeElementIndex を一切呼ばずに
+    // 自前のループ変数だけで decodeXxxElement を呼ぶため、`position` が更新されず
+    // 全要素が同じ（初期値の）位置を読んでしまう。decodeElementIndex を経由させて
+    // `position` を確実に前進させるため false にする。
+    override fun decodeSequentially(): Boolean = false
+
+    override fun decodeElementIndex(descriptor: SerialDescriptor): Int {
+        position++
+        return if (position >= values.size) CompositeDecoder.DECODE_DONE else position
+    }
+
+    private fun current(): String = values.getOrElse(position) { "" }
+
+    private fun violate(message: String) {
+        ctx.violations += Violation(name, message)
+    }
+
+    override fun decodeString(): String = current()
+
+    override fun decodeInt(): Int =
+        current().toIntOrNull() ?: run { violate("must be an integer"); 0 }
+
+    override fun decodeLong(): Long =
+        current().toLongOrNull() ?: run { violate("must be an integer"); 0L }
+
+    override fun decodeDouble(): Double =
+        current().toDoubleOrNull() ?: run { violate("must be a number"); 0.0 }
+
+    override fun decodeBoolean(): Boolean =
+        current().toBooleanStrictOrNull() ?: run { violate("must be true or false"); false }
+
+    override fun decodeEnum(enumDescriptor: SerialDescriptor): Int {
+        val text = current()
+        val found = (0 until enumDescriptor.elementsCount)
+            .firstOrNull { enumDescriptor.getElementName(it) == text }
+        if (found != null) return found
+        violate("must be one of: " + (0 until enumDescriptor.elementsCount).joinToString { enumDescriptor.getElementName(it) })
         return 0
     }
 }
