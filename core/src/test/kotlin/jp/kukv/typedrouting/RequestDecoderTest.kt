@@ -123,4 +123,15 @@ class RequestDecoderTest {
         assertEquals(Paging(page = 2, limit = 50), result.paging)
         assertEquals(Paging(page = 3, limit = 20), result.filters)
     }
+
+    @Test
+    fun `group with no values at all fills in every default`() {
+        val ctx = context()
+
+        val result = ctx.decode(serializer<Grouped>())
+
+        assertEquals(Paging(page = 1, limit = 20), result.paging)
+        assertEquals(Paging(page = 1, limit = 20), result.filters)
+        assertTrue(ctx.violations.isEmpty())
+    }
 }
