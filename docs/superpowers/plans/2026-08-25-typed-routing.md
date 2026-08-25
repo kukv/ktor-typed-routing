@@ -1048,7 +1048,12 @@ internal class ObjectDecoder(
     override fun decodeNull(): Nothing? = null
 
     override fun beginStructure(descriptor: SerialDescriptor): CompositeDecoder {
-        // decodeElementIndex で選ばれた要素がグループのとき、その子を同じソースで復号する。
+        // kotlinx は復号の開始時に一度 beginStructure を呼ぶ。このとき decodeElementIndex は
+        // まだ走っておらず index は -1 のままなので、自分自身を返す。
+        if (index < 0) return this
+
+        // 2 回目以降は decodeElementIndex で選ばれた要素がグループのとき呼ばれる。
+        // その子を同じソース・合成した接頭辞で復号する。
         val origin = originAt(index)
         return ObjectDecoder(descriptor, ctx, prefix + origin.prefix, ownKind = origin.kind)
     }
