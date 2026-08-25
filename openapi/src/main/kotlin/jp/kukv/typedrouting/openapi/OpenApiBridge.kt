@@ -70,10 +70,11 @@ private fun Route.applyEndpointSpec(spec: EndpointSpec) {
         }
 
         responses {
-            spec.responseType?.let { responseType ->
-                response(spec.status.value) {
-                    schema = buildSchema(responseType)
-                }
+            // OAS 3.1 は Responses Object に最低 1 件を要求する。
+            // Res = Unit（responseType == null、既定 204）でもレスポンス自体は必ず出し、
+            // スキーマだけを条件付きにする。
+            response(spec.status.value) {
+                spec.responseType?.let { schema = buildSchema(it) }
             }
             spec.errors.forEach { (status, errorType) ->
                 response(status.value) {
