@@ -37,12 +37,14 @@ public val EndpointSpecKey: AttributeKey<EndpointSpec> = AttributeKey("TypedRout
  * バインド対象の形を検証する。違反は起動時に例外にする。
  *
  * - グループの中に `@Body` を書くことはできない
+ * - `@Body` は 1 つのリクエストにつき 1 つまで
  * - `@Body` はスカラー（プリミティブ / String / enum / value class）であってはならない
  * - 平坦化した結果、同じソースで同じ名前になる要素があってはならない
  */
 @OptIn(ExperimentalSerializationApi::class)
 internal fun SerialDescriptor.validateBindingShape() {
     val seen = mutableMapOf<Pair<SourceKind, String>, String>()
+    var bodyAt: String? = null
 
     fun walk(descriptor: SerialDescriptor, prefix: String, inherited: SourceKind?, trail: String) {
         for (i in 0 until descriptor.elementsCount) {
@@ -54,6 +56,14 @@ internal fun SerialDescriptor.validateBindingShape() {
                     "@Body is not allowed inside a group (at '$path' of '$serialName'). " +
                         "A group must stay within a single input source."
                 }
+                // ボディは 1 つしか読めない。2 つ目は同じテキストをもう一度復号するだけで、
+                // 書いた本人の意図とは必ず食い違う。
+                check(bodyAt == null) {
+                    "Only one @Body is allowed per request (at '$path' of '$serialName'), " +
+                        "but '$bodyAt' is already annotated with @Body."
+                }
+                bodyAt = path
+
                 // スカラーの @Body を復号すると kotlinx は decodeStringElement などを呼ぶ。
                 // AbstractDecoder ではそれらが final で decodeString() に委譲されるため、
                 // ボディではなく直前の要素の値を静かに読んでしまう。起動時に弾く。

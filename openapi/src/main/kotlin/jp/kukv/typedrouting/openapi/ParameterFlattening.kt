@@ -5,6 +5,9 @@ import jp.kukv.typedrouting.Cookie
 import jp.kukv.typedrouting.Header
 import jp.kukv.typedrouting.Path
 import jp.kukv.typedrouting.Query
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.Transient
+import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.descriptors.StructureKind
 import kotlinx.serialization.serializer
 import kotlin.reflect.KClass
@@ -53,22 +56,31 @@ private fun KProperty1<*, *>.originOrNull(serialName: String): Origin? {
     return null
 }
 
-/** 平坦化の対象となる要素 1 つ。[serialName] は `@SerialName` を反映した名前。 */
+/**
+ * 平坦化の対象となる要素 1 つ。
+ *
+ * @param serialName `@SerialName` を反映した名前
+ * @param elementDescriptor この要素の直列化記述子。プロパティ単位の `@Serializable(with = ...)`
+ *   を反映した形になっているため、グループ判定はこれを見る。対応づけられなければ `null`
+ */
 private data class Element(
     val property: KProperty1<*, *>,
     val parameter: KParameter?,
     val serialName: String,
+    val elementDescriptor: SerialDescriptor?,
 )
 
 /**
  * 宣言順に要素を返す。`memberProperties` は順序が保証されないため、
  * プライマリコンストラクタの引数順に並べ直す。
  *
- * `@SerialName` を反映した名前は `SerialDescriptor` 側にしかないため、descriptor の
- * 要素と添字で対応づける。`@Serializable` なクラスの descriptor の要素順は
- * プライマリコンストラクタの引数順と一致するのでこれは安全だが、要素数が食い違う場合
- * （`@Transient` を含む場合など）は対応を保証できないのでプロパティ名に退避する。
+ * `@SerialName` を反映した名前と、プロパティ単位の serializer を反映した記述子は
+ * `SerialDescriptor` 側にしかないため、descriptor の要素と添字で対応づける。
+ * `@Transient` を付けたプロパティは直列化されず descriptor に現れないので、
+ * 対応づける前に除く。それでも要素数が食い違う場合は対応を保証できないので、
+ * 名前はプロパティ名に、グループ判定は型からの推定に退避する。
  */
+@OptIn(ExperimentalSerializationApi::class)
 private fun KType.orderedElements(): List<Element> {
     val classifier = classifier as? KClass<*> ?: return emptyList()
     val properties = classifier.memberProperties.associateBy { it.name }
@@ -78,17 +90,17 @@ private fun KType.orderedElements(): List<Element> {
             properties.values.map { it to null }
         } else {
             parameters.mapNotNull { parameter -> properties[parameter.name]?.let { it to parameter } }
-        }
+        }.filterNot { (property, _) -> property.annotations.any { it is Transient } }
 
-    val serialNames = runCatching { serializer(this).descriptor }.getOrNull()
+    val descriptor = runCatching { serializer(this).descriptor }.getOrNull()
         ?.takeIf { it.elementsCount == ordered.size }
-        ?.let { descriptor -> List(descriptor.elementsCount) { descriptor.getElementName(it) } }
 
     return ordered.mapIndexed { index, (property, parameter) ->
         Element(
             property = property,
             parameter = parameter,
-            serialName = serialNames?.get(index) ?: property.name,
+            serialName = descriptor?.getElementName(index) ?: property.name,
+            elementDescriptor = descriptor?.getElementDescriptor(index),
         )
     }
 }
@@ -101,11 +113,13 @@ private fun KType.orderedElements(): List<Element> {
  * 非 data の `@Serializable class` が `:core` ではグループ、`:openapi` ではスカラーになり、
  * 2 つのモジュールで挙動が食い違う。
  */
-private fun KType.isGroupType(): Boolean {
-    val descriptor = runCatching { serializer(this).descriptor }.getOrNull() ?: return false
-    if (descriptor.isInline) return false
-    return descriptor.kind == StructureKind.CLASS || descriptor.kind == StructureKind.OBJECT
+private fun SerialDescriptor.isGroupDescriptor(): Boolean {
+    if (isInline) return false
+    return kind == StructureKind.CLASS || kind == StructureKind.OBJECT
 }
+
+private fun KType.isGroupType(): Boolean =
+    runCatching { serializer(this).descriptor }.getOrNull()?.isGroupDescriptor() ?: false
 
 /**
  * Req の型を OpenAPI の `parameters` 相当に平坦化する。
@@ -115,7 +129,7 @@ internal fun KType.flattenParameters(): List<FlatParameter> {
     val result = mutableListOf<FlatParameter>()
 
     fun walk(type: KType, prefix: String, inherited: ParameterIn?, ancestorOptional: Boolean) {
-        for ((property, parameter, serialName) in type.orderedElements()) {
+        for ((property, parameter, serialName, elementDescriptor) in type.orderedElements()) {
             val origin = property.originOrNull(serialName)
             if (origin?.isBody == true) continue
 
@@ -125,7 +139,11 @@ internal fun KType.flattenParameters(): List<FlatParameter> {
             val elementType = property.returnType
             val optional = ancestorOptional || parameter?.isOptional == true || elementType.isMarkedNullable
 
-            if (elementType.isGroupType()) {
+            // グループかどうかはプロパティの記述子で決める。プロパティ単位の
+            // `@Serializable(with = ...)` を無視して型から引くと、`:core` がスカラーとして
+            // 束縛するものを `:openapi` だけが展開してしまう。
+            val isGroup = elementDescriptor?.isGroupDescriptor() ?: elementType.isGroupType()
+            if (isGroup) {
                 // グループ自体が任意（既定値あり）または nullable なら、
                 // `:core` はグループごと省略を許すので子孫はすべて任意になる。
                 walk(elementType, prefix + elementPrefix, location, optional)

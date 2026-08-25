@@ -255,5 +255,6 @@ Ktor の Gradle プラグインによるコード推論（route ハンドラの�
 - **リクエストボディは JSON のみ。** `StringFormat` は差し替え可能だが、初版では JSON 専用。
 - **型付きエンドポイントのレスポンスは `ContentNegotiation` を経由しない。** `respondText` で直接 JSON を書き出すため、`ContentNegotiation` をインストールしていなくても動くし、インストールしても型付きエンドポイントの挙動は変わらない（同じ `routing {}` 配下の素の Ktor エンドポイントには通常どおり効く）。
 - **リクエストボディの不正は `RequestBindingException` ではなく `kotlinx.serialization.SerializationException` として届く。** 壊れた JSON は `Json.decodeFromString` の中で失敗し、本ライブラリはそれを捕捉しない。400 を返したいなら `StatusPages` に `exception<SerializationException>` を登録する（「エラー処理」を参照）。バインド対象の型が受け付けない値（`@Body` に載せた型のフィールドの型違いなど）も同様である。
-- **`@Body` は構造型でなければならない。** `@Body val text: String` のようなスカラー（プリミティブ / String / enum）のボディは起動時に例外になる。`@Serializable` なクラスで包むこと。
+- **`@Body` は構造型でなければならない。** `@Body val text: String` のようなスカラー（プリミティブ / String / enum / `@JvmInline value class`）のボディは起動時に例外になる。`@Serializable` なクラスで包むこと。
+- **`@Body` は 1 リクエストにつき 1 つまで。** 2 つ以上付けると起動時に例外になる。
 - **プリミティブの型変換失敗はすべて集めて報告するが、カスタム serializer が投げた例外は最初の 1 件で打ち切る。** kotlinx.serialization の `Decoder` の性質上、カスタム serializer 内の例外はそこで即座に伝播するため、他のフィールドの検証を続けられない。

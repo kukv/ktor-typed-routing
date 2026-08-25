@@ -5,8 +5,15 @@ import jp.kukv.typedrouting.Cookie
 import jp.kukv.typedrouting.Header
 import jp.kukv.typedrouting.Path
 import jp.kukv.typedrouting.Query
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlin.reflect.typeOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -77,6 +84,46 @@ class ParameterFlatteningTest {
         @Query("explicit") @SerialName("ignored") val overridden: String,
         @Query(prefix = "w.") val window: SerialNamedGroup,
     )
+
+    @Serializable
+    data class WithTransient(
+        @Query @SerialName("user_id") val userId: String,
+        @Transient val note: String = "",
+    )
+
+    /** `Window` を 1 本の文字列として直列化する。`:core` はこれをスカラーとして束縛する。 */
+    object WindowAsText : KSerializer<Window> {
+        override val descriptor: SerialDescriptor =
+            PrimitiveSerialDescriptor("WindowAsText", PrimitiveKind.STRING)
+
+        override fun serialize(encoder: Encoder, value: Window) {
+            encoder.encodeString("${value.from}..${value.to}")
+        }
+
+        override fun deserialize(decoder: Decoder): Window {
+            val (from, to) = decoder.decodeString().split("..", limit = 2)
+            return Window(from, to)
+        }
+    }
+
+    @Serializable
+    data class CustomSerialized(
+        @Query @Serializable(with = WindowAsText::class) val window: Window,
+    )
+
+    @Test
+    fun `serial names survive a transient property`() {
+        val flat = typeOf<WithTransient>().flattenParameters()
+
+        assertEquals(listOf("user_id"), flat.map { it.name })
+    }
+
+    @Test
+    fun `a property level serializer decides whether the element is a group`() {
+        val flat = typeOf<CustomSerialized>().flattenParameters()
+
+        assertEquals(listOf("window"), flat.map { it.name })
+    }
 
     @Test
     fun `serial names are used for parameter names`() {

@@ -33,6 +33,13 @@ class RequestDecoderGroupTest {
         @Query val paging: Paging?,
     )
 
+    /** グループの中に更にグループがある形。外側の存在判定は内側まで再帰する必要がある。 */
+    @Serializable
+    private data class Middle(@Query(prefix = "i.") val inner: Strict?)
+
+    @Serializable
+    private data class Nested(@Query(prefix = "m.") val middle: Middle?)
+
     /** 直前のスカラーに値があり、次の nullable グループには値が無い並び。 */
     @Serializable
     private data class AfterPresentScalar(
@@ -100,6 +107,23 @@ class RequestDecoderGroupTest {
 
         assertNull(result.q)
         assertEquals(Paging(page = 2, limit = 20), result.paging)
+    }
+
+    @Test
+    fun `nullable group containing only an empty nested group becomes null`() {
+        val ctx = context()
+
+        val result = ctx.decode(serializer<Nested>())
+
+        assertNull(result.middle)
+        assertTrue(ctx.violations.isEmpty())
+    }
+
+    @Test
+    fun `nested group is expanded when a descendant has a value`() {
+        val result = context("m.i.a" to listOf("x")).decode(serializer<Nested>())
+
+        assertEquals(Strict("x"), result.middle?.inner)
     }
 
     @Test
