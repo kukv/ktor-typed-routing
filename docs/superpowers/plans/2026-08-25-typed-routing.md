@@ -177,7 +177,7 @@ dependencies {
 description = "ktor-typed-routing-openapi"
 
 dependencies {
-    api(project(":core"))
+    api(project(":ktor-typed-routing-core"))
     api(libs.ktor.server.routing.openapi)
     implementation(libs.kotlin.reflect)
 
@@ -194,6 +194,11 @@ dependencies {
 project(":core").name = "ktor-typed-routing-core"
 project(":openapi").name = "ktor-typed-routing-openapi"
 ```
+
+**この rename の後、プロジェクトパス自体が `:ktor-typed-routing-core` /
+`:ktor-typed-routing-openapi` に変わる。** そのため `openapi` の依存宣言は
+`project(":core")` ではなく `project(":ktor-typed-routing-core")` と書く必要があり、
+Gradle のタスクパスも `:ktor-typed-routing-core:test` になる。
 
 - [ ] **Step 4: セットアップの検証テストを書く**
 
@@ -233,7 +238,12 @@ class SetupTest {
 Run: `./gradlew :ktor-typed-routing-core:test --tests '*SetupTest*'`
 Expected: PASS
 
-Gradle wrapper が未生成の場合は先に `gradle wrapper --gradle-version 8.14` を実行する。
+Gradle wrapper が未生成の場合は先に `gradle wrapper --gradle-version 9.7.1` を実行する。
+
+**Gradle 9.7.1 を使うこと。** このマシンの既定 JDK は 25 で、Gradle 8.x のデーモンは
+JDK 25 上で起動できない。9.7.1 なら `JAVA_HOME` を切り替えずにそのまま動く
+（検証済み）。`jvmToolchain(21)` はコンパイル対象の指定であり、
+デーモン自体が動く JVM とは別物である点に注意。
 
 - [ ] **Step 6: コミット**
 
