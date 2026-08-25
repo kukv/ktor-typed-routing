@@ -1262,7 +1262,11 @@ private class MultiValueDecoder(
 
     override fun decodeCollectionSize(descriptor: SerialDescriptor): Int = values.size
 
-    override fun decodeSequentially(): Boolean = true
+    // false にすること。true にすると kotlinx は decodeElementIndex を呼ばずに
+    // 自前のループカウンタで decodeXxxElement(descriptor, index) を回す。
+    // AbstractDecoder のそれは final で index を捨てて素の decodeXxx() に委譲するため、
+    // position が進まず全要素が同じ（初期）値になる。
+    override fun decodeSequentially(): Boolean = false
 
     override fun decodeElementIndex(descriptor: SerialDescriptor): Int {
         position++
@@ -1300,9 +1304,14 @@ private class MultiValueDecoder(
 }
 ```
 
-`decodeSequentially()` を `true` にすると kotlinx は `decodeCollectionSize` の
-件数だけ順に値を要求するため、`decodeElementIndex` は使われない。両方実装しておくのは
-kotlinx のバージョン差で経路が変わっても動くようにするためである。
+`decodeSequentially()` は **`false` にすること。**
+
+`true` にすると kotlinx は `decodeElementIndex` を呼ばず、自前のループカウンタで
+`decodeXxxElement(descriptor, index)` を回す。ところが kotlinx 1.11.0 の
+`AbstractDecoder.decodeXxxElement` は `final` で、受け取った `index` を捨てて
+素の `decodeXxx()` に委譲する。その結果 `position` が一度も進まず、
+全要素が同じ（初期）値になる。`false` にして `decodeElementIndex` を通す経路を
+強制することで、`position` が正しく進む。
 
 `decodeElementIndex` の欠落判定も更新し、LIST 要素は値が 0 件でも
 `isElementOptional` なら既定値に委ねるようにする。Task 5 の `valuesFor` は
