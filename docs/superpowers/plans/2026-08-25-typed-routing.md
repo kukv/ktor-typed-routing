@@ -266,8 +266,8 @@ git commit -m "build: Gradle プロジェクトをセットアップ"
 - Produces:
   - `annotation class Path(val name: String = "")`
   - `annotation class Query(val name: String = "", val prefix: String = "")`
-  - `annotation class Header(val name: String = "")`
-  - `annotation class Cookie(val name: String = "")`
+  - `annotation class Header(val name: String = "", val prefix: String = "")`
+  - `annotation class Cookie(val name: String = "", val prefix: String = "")`
   - `annotation class Body`
   - `data class Violation(val path: String, val message: String)`
   - `class RequestBindingException(val violations: List<Violation>) : Exception`
