@@ -33,8 +33,11 @@ public fun <Req, Res> Route.typedEndpoint(
     build: EndpointBuilder<Req, Res>.() -> Unit,
 ): Route {
     val builder = EndpointBuilder<Req, Res>().apply(build)
+    // [path] だけではエンドポイントを特定できない（省略時は空文字になる）ため、
+    // 絶対パスを返す親ルートの toString() と連結して識別子にする。
+    val location = ("$this".removeSuffix("/") + path).ifEmpty { "/" }
     val handler = builder.handler
-        ?: error("handle { } was not called for $method $path. Every endpoint must declare a handler.")
+        ?: error("handle { } was not called for $method $location. Every endpoint must declare a handler.")
 
     requestSerializer?.descriptor?.validateBindingShape()
 
