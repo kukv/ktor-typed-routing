@@ -1952,7 +1952,7 @@ public class ValidationScope {
 package jp.kukv.typedrouting
 
 import io.ktor.http.HttpStatusCode
-import io.ktor.util.KtorDsl
+import io.ktor.utils.io.KtorDsl
 import kotlin.reflect.KType
 import kotlin.reflect.typeOf
 
