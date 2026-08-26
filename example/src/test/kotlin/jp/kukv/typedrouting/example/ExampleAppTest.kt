@@ -105,12 +105,18 @@ class ExampleAppTest {
     }
 
     @Test
-    fun `openapi document lists the typed endpoints and hides the plain ones`() = exampleApp {
-        val document = client.get("/openapi.json").bodyAsText()
+    fun `swagger serves a document describing the typed endpoints`() = exampleApp {
+        // 文書のソースを指定していないので、ルートツリーから生成されたものが返る。
+        val document = client.get("/swagger/documentation.yaml").bodyAsText()
 
-        assertTrue(document.contains(""""/orgs/{orgId}/users""""), document)
+        assertTrue(document.contains("/orgs/{orgId}/users:"), document)
         assertTrue(document.contains("ユーザーを一覧する"), document)
-        assertTrue(!document.contains(""""/health""""), document)
-        assertTrue(!document.contains(""""/openapi.json""""), document)
+        // install(TypedRoutingOpenApi) だけで、describeTypedEndpoints() の明示呼び出しは要らない。
+        assertTrue(document.contains("orgId"), document)
+        // hide() した素の Ktor ルートと Swagger 自身のルートは載らない。
+        assertTrue(!document.contains("/health:"), document)
+        assertTrue(!document.contains("/swagger"), document)
+
+        assertEquals(HttpStatusCode.OK, client.get("/swagger").status)
     }
 }

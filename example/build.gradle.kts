@@ -16,9 +16,10 @@ application {
 }
 
 dependencies {
-    implementation(project(":ktor-typed-routing-core"))
-    implementation(project(":ktor-typed-routing-openapi"))
+    implementation(project(":core"))
+    implementation(project(":openapi"))
     implementation(libs.ktor.server.netty)
+    implementation(libs.ktor.server.swagger)
     implementation(libs.ktor.server.status.pages)
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)

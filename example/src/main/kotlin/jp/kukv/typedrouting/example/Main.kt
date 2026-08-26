@@ -1,8 +1,6 @@
 package jp.kukv.typedrouting.example
 
-import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
-import io.ktor.openapi.OpenApiDoc
 import io.ktor.openapi.OpenApiInfo
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -12,17 +10,17 @@ import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
+import io.ktor.server.plugins.swagger.swaggerUI
 import io.ktor.server.request.uri
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.get as ktorGet
-import io.ktor.server.routing.openapi.OpenApiDocSource
 import io.ktor.server.routing.openapi.hide
 import io.ktor.server.routing.routing
 import jp.kukv.typedrouting.RequestBindingException
 import jp.kukv.typedrouting.TypedRouting
 import jp.kukv.typedrouting.ValidationException
-import jp.kukv.typedrouting.openapi.describeTypedEndpoints
+import jp.kukv.typedrouting.openapi.TypedRoutingOpenApi
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 
@@ -53,6 +51,9 @@ fun Application.module(users: UserRepository = UserRepository()) {
         }
     }
 
+    // 起動完了時にエンドポイントのメタデータを OpenAPI に流し込む。
+    install(TypedRoutingOpenApi)
+
     // 型付きエンドポイント自身のレスポンスは経由しないが、下の StatusPages の
     // call.respond が JSON を書き出すために要る。
     install(ContentNegotiation) { json() }
@@ -61,13 +62,13 @@ fun Application.module(users: UserRepository = UserRepository()) {
     routing {
         userRoutes(users)
 
-        ktorGet("/health") { call.respondText("ok") }.hide()
-        ktorGet("/openapi.json") {
-            call.respondText(openApiDocument(call.application), ContentType.Application.Json)
-        }.hide()
+        // ドキュメントのソースを指定しなければ、ルートツリーから生成したものが使われる。
+        // /swagger に Swagger UI、/swagger/documentation.yaml に文書が出る。
+        swaggerUI("swagger") {
+            info = OpenApiInfo(title = "Example User API", version = "1.0.0")
+        }
 
-        // 対象にしたいエンドポイントをすべて定義し終えた後に呼ぶ。
-        describeTypedEndpoints()
+        ktorGet("/health") { call.respondText("ok") }.hide()
     }
 }
 
@@ -96,12 +97,3 @@ private fun Application.installErrorHandling() {
         }
     }
 }
-
-/** `ktor-server-routing-openapi` にはドキュメント配信ルートが無いので、自分で 1 本生やす。 */
-private fun openApiDocument(application: Application): String =
-    OpenApiDocSource.Routing()
-        .read(
-            application,
-            OpenApiDoc(info = OpenApiInfo(title = "Example User API", version = "1.0.0")),
-        )
-        .content
