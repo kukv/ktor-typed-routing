@@ -4,7 +4,7 @@ plugins {
 }
 
 subprojects {
-    group = "jp.kukv"
+    group = "jp.kukv.ktor-typed-routing"
     version = "0.1.0-SNAPSHOT"
 
     apply(plugin = "org.jetbrains.kotlin.jvm")

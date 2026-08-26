@@ -18,8 +18,8 @@ Ktor 標準 routing の上に構築する型付きエンドポイント DSL — 
 
 ```kotlin
 dependencies {
-    implementation("jp.kukv:ktor-typed-routing-core:0.1.0-SNAPSHOT")
-    implementation("jp.kukv:ktor-typed-routing-openapi:0.1.0-SNAPSHOT")  // OpenAPI を使う場合
+    implementation("jp.kukv.ktor-typed-routing:core:0.1.0-SNAPSHOT")
+    implementation("jp.kukv.ktor-typed-routing:openapi:0.1.0-SNAPSHOT")  // OpenAPI を使う場合
 }
 ```
 
@@ -209,9 +209,11 @@ install(TypedRouting) {
 
 ## OpenAPI
 
-`:openapi` は公式 `ktor-server-routing-openapi` へのブリッジで、`EndpointSpec` を公式の `describe {}` に流し込む。
+`:openapi` は公式 `ktor-server-routing-openapi` へのブリッジで、`EndpointSpec` を公式の `describe {}` に流し込む。`install(TypedRoutingOpenApi)` しておけば、起動完了時にルートツリーを 1 度走査してメタデータを流し込む。
 
 ```kotlin
+install(TypedRoutingOpenApi)   // install の位置はどこでもよい
+
 routing {
     route("/orgs/{orgId}/users") {
         get<SearchUsersReq, List<User>> {
@@ -219,15 +221,35 @@ routing {
             handle { req -> userService.search(req.orgId) }
         }
     }
+}
+```
+
+### 呼ぶタイミングを自分で決める
+
+プラグインを使わず `describeTypedEndpoints()` を直接呼ぶこともできる。`Route` の拡張として呼べば配下だけを、`Application` の拡張として呼べば全体を対象にする。
+
+```kotlin
+routing {
+    route("/orgs/{orgId}/users") { /* ... */ }
     describeTypedEndpoints()   // すべてのエンドポイントを定義し終えた後に呼ぶ
 }
 ```
 
-**`describeTypedEndpoints()` は、対象にしたいすべてのエンドポイントを定義し終えた後に呼ぶこと。** ルートツリーを 1 度だけ走査するため、呼び出し時点で存在しないエンドポイントはドキュメントに載らない。
+**その場合は、対象にしたいすべてのエンドポイントを定義し終えた後に呼ぶこと。** ルートツリーを 1 度だけ走査するため、呼び出し時点で存在しないエンドポイントはドキュメントに載らない。プラグインは起動完了まで待つので、この順序を気にしなくてよい。
 
 ### ドキュメントの取り出し
 
-`ktor-server-routing-openapi` 3.5.2 には `openAPI(path)` のようなドキュメント配信ルートは**含まれていない**。ドキュメントの生成自体は次のように行う。
+`ktor-server-routing-openapi` 3.5.2 には `openAPI(path)` のようなドキュメント配信ルートは含まれていないが、`ktor-server-swagger` を足せば `swaggerUI(path)` がそれを兼ねる。**ドキュメントのソースを指定しなければ、ルートツリーから生成したものにフォールバックする**ので、配信ルートを自分で書く必要はない。
+
+```kotlin
+routing {
+    swaggerUI("swagger") {
+        info = OpenApiInfo(title = "My API", version = "1.0.0")
+    }
+}
+```
+
+`/swagger` に Swagger UI、`/swagger/documentation.yaml` にドキュメントが出る。Swagger UI が要らず、ドキュメントの文字列だけが欲しい場合は次のように取る。
 
 ```kotlin
 val text = OpenApiDocSource.Routing()
@@ -235,11 +257,9 @@ val text = OpenApiDocSource.Routing()
     .content
 ```
 
-Swagger UI のような配信ルートが要る場合は、`ktor-server-swagger` / `ktor-server-openapi` を自分で足す。
-
 ### 素の Ktor ルートも文書に現れる
 
-公式ジェネレータはルートツリー全体を列挙するため、`describeTypedEndpoints()` を呼んでいても、同じツリーの中にある素の Ktor ルート（`routing { get("/health") { ... } }` など）は `"/health":{"get":{}}` という空の operation として文書に残る。「ブリッジが読み飛ばす」とは「文書から消す」ことではなく「メタデータを何も足さない」ことを意味する。文書から消したい場合は公式の `Route.hide()` を使う。
+公式ジェネレータはルートツリー全体を列挙するため、メタデータを流し込んでいても、同じツリーの中にある素の Ktor ルート（`routing { get("/health") { ... } }` など）は `"/health":{"get":{}}` という空の operation として文書に残る。「ブリッジが読み飛ばす」とは「文書から消す」ことではなく「メタデータを何も足さない」ことを意味する。文書から消したい場合は公式の `Route.hide()` を使う。
 
 ```kotlin
 get("/health") { call.respondText("ok") }.hide()
@@ -248,6 +268,27 @@ get("/health") { call.respondText("ok") }.hide()
 ### Gradle のコード推論について
 
 Ktor の Gradle プラグインによるコード推論（route ハンドラの中身を静的解析して OpenAPI メタデータを補う機能）は本 DSL のパターンを認識できないため空振りする。実行時注釈（本ライブラリが生成するもの）が常に最優先されるため有効なままでも定義自体は正しく出るが、無駄な解析を避けるため `codeInferenceEnabled = false` にして実行時注釈に一本化することを推奨する。
+
+## サンプル
+
+`example/` に、ここで説明した機能を一通り使った動くアプリを置いている（インメモリのユーザー API）。
+
+```
+./gradlew :example:run     # http://localhost:8080 で起動する
+./gradlew :example:test    # 挙動を固定したテスト
+```
+
+```
+GET    /orgs/{orgId}/users            一覧（クエリのグループ・任意のヘッダ・バリデーション）
+POST   /orgs/{orgId}/users            作成（@Body・201 Created・違反の一括報告）
+GET    /orgs/{orgId}/users/{userId}   取得（見つからなければ 404）
+DELETE /orgs/{orgId}/users/{userId}   削除（Res が Unit なので 204 No Content）
+GET    /swagger                       Swagger UI と生成した OpenAPI ドキュメント
+GET    /health                        hide() したので文書には出ない
+```
+
+`Main.kt` に `install(TypedRouting)` と `around`、`StatusPages` によるエラー処理、
+`install(TypedRoutingOpenApi)` と `swaggerUI` がまとまっている。
 
 ## 制限事項
 
