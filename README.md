@@ -249,6 +249,27 @@ get("/health") { call.respondText("ok") }.hide()
 
 Ktor の Gradle プラグインによるコード推論（route ハンドラの中身を静的解析して OpenAPI メタデータを補う機能）は本 DSL のパターンを認識できないため空振りする。実行時注釈（本ライブラリが生成するもの）が常に最優先されるため有効なままでも定義自体は正しく出るが、無駄な解析を避けるため `codeInferenceEnabled = false` にして実行時注釈に一本化することを推奨する。
 
+## サンプル
+
+`example/` に、ここで説明した機能を一通り使った動くアプリを置いている（インメモリのユーザー API）。
+
+```
+./gradlew :ktor-typed-routing-example:run     # http://localhost:8080 で起動する
+./gradlew :ktor-typed-routing-example:test    # 挙動を固定したテスト
+```
+
+```
+GET    /orgs/{orgId}/users            一覧（クエリのグループ・任意のヘッダ・バリデーション）
+POST   /orgs/{orgId}/users            作成（@Body・201 Created・違反の一括報告）
+GET    /orgs/{orgId}/users/{userId}   取得（見つからなければ 404）
+DELETE /orgs/{orgId}/users/{userId}   削除（Res が Unit なので 204 No Content）
+GET    /openapi.json                  生成した OpenAPI ドキュメント（素の Ktor ルート）
+GET    /health                        hide() したので文書には出ない
+```
+
+`Main.kt` に `install(TypedRouting)` と `around`、`StatusPages` によるエラー処理、
+`describeTypedEndpoints()` の呼び出し位置がまとまっている。
+
 ## 制限事項
 
 - **JVM 専用。** マルチプラットフォーム対応はしていない。
