@@ -1,4 +1,4 @@
-description = "ktor-typed-routing-openapi"
+description = "型付きエンドポイントのメタデータを公式 ktor-server-routing-openapi に流し込むブリッジ"
 
 dependencies {
     api(project(":core"))

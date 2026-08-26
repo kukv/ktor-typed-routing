@@ -1,4 +1,4 @@
-description = "ktor-typed-routing-core"
+description = "Ktor 標準 routing の上に乗る型付きエンドポイント DSL"
 
 dependencies {
     api(libs.ktor.server.core)

@@ -4,7 +4,7 @@ plugins {
     application
 }
 
-description = "ktor-typed-routing-example"
+description = "ktor-typed-routing の使い方を示すサンプルアプリ"
 
 // サンプルは公開 API ではないので、explicitApi の可視性修飾子までは求めない。
 kotlin {
