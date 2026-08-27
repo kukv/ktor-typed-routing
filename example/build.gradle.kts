@@ -1,6 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.ExplicitApiMode
 
 plugins {
+    id("ktor.kotlin-conventions")
     application
 }
 
