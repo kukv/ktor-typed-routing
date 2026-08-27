@@ -17,6 +17,9 @@ application {
 }
 
 dependencies {
+    // ktor-server-netty が引き込む Netty に既知の脆弱性があるため、修正済みバージョンへ引き上げる
+    implementation(platform(libs.netty.bom))
+
     implementation(project(":core"))
     implementation(project(":openapi"))
     implementation(libs.ktor.server.netty)
