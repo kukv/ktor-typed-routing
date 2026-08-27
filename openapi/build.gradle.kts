@@ -1,3 +1,7 @@
+plugins {
+    id("ktor.kotlin-conventions")
+}
+
 description = "型付きエンドポイントのメタデータを公式 ktor-server-routing-openapi に流し込むブリッジ"
 
 dependencies {

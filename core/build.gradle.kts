@@ -1,3 +1,7 @@
+plugins {
+    id("ktor.kotlin-conventions")
+}
+
 description = "Ktor 標準 routing の上に乗る型付きエンドポイント DSL"
 
 dependencies {
