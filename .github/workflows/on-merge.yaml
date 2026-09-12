@@ -24,6 +24,7 @@ jobs:
           persist-credentials: false
 
       - name: Check
-        uses: ./.github/actions/gradle-action
+        # $/ 記法は actionlint(v1.7.12)が構文エラーにするため ./ のままにする
+        uses: ./.github/actions/gradle-action # zizmor: ignore[self-repository]
         with:
           command: check
