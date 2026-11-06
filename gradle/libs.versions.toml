@@ -1,6 +1,6 @@
 [versions]
 kotlin = "2.4.21"
-ktor = "3.6.0"
+ktor = "3.6.1"
 serialization = "1.11.0"
 logback = "1.6.5"
 httpcomponents-core5 = "5.4.4"
